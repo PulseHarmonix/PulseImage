@@ -414,26 +414,6 @@ Preview Mode Behavior:
 
 ================================================================================
 
-KNOWN BUGS
-
-================================================================================
-
-
-
-1\. Sometimes the scrollbar in the Library view does not appear.
-
-&#x20;  Fix: Click the "Library" button in the sidebar again. This usually forces the scroller to initialize correctly.
-
-
-
-2\. In preview mode, if a video has been playing and you navigate back to the library, the audio may continue playing in the background.
-
-&#x20;  Fix: Click on any image in the library, then go back to preview mode. This stops the orphaned audio.
-
-
-
-================================================================================
-
 NOTES
 
 ================================================================================
