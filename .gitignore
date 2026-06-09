@@ -21,10 +21,10 @@ wheels/
 .installed.cfg
 *.egg
 
-# Generated media
-images/
-videos/
-audio/
+# Generated media folders (but keep the folders themselves via .gitkeep)
+images/*
+videos/*
+audio/*
 
 # IDE / OS
 .vscode/
@@ -50,3 +50,8 @@ projects.json
 
 # EXCEPTION: Keep the home image for the homepage
 !static/images/home.jpg
+
+# Exception: Allow .gitkeep files so the folders are tracked
+!images/.gitkeep
+!videos/.gitkeep
+!audio/.gitkeep
