@@ -1,0 +1,25 @@
+# Core web framework
+fastapi
+uvicorn[standard]
+
+# Templating and forms
+jinja2
+python-multipart
+
+# HTTP client (for ComfyUI communication)
+httpx
+
+# Image handling
+Pillow
+
+# Optional: Pure-Python video trimming fallback for export (no system ffmpeg required)
+# This enables trimming videos with offsets even if ffmpeg is not installed.
+# Note: re-encodes the video (slower, slightly lower quality than ffmpeg -c copy).
+opencv-python-headless
+
+# Notes:
+# - This requirements.txt covers the web app + sequence export features.
+# - For the full experience you also need a running ComfyUI server (with its own
+#   dependencies like torch, etc.) that this app talks to.
+# - On Windows, opencv-python-headless provides the necessary video codecs.
+# - If you have ffmpeg installed, the export will prefer the fast ffmpeg path.

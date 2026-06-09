@@ -1,0 +1,113 @@
+{
+  "image_model": "schnell",
+  "i2i_model": "klein",
+  "library_video_playback": "play_loop",
+  "qwen_turbo": true,
+  "comfyui_url": "http://10.1.5.202:8188",
+  "ollama_url": "http://10.1.5.202:11434",
+  "ollama_model": "qwen3:8b",
+  "ollama_timeout": 180,
+  "failed_gen_clear_seconds": 600,
+  "prompt_enhancers": [
+    {
+      "id": "none",
+      "name": "No enhancement",
+      "prompt": ""
+    },
+    {
+      "id": "cinematic",
+      "name": "Cinematic",
+      "prompt": "cinematic lighting, dramatic composition, film grain, anamorphic lens, color graded, shot on 35mm, high production value, moody atmosphere"
+    },
+    {
+      "id": "anime",
+      "name": "Anime",
+      "prompt": "detailed anime style, clean linework, vibrant colors, expressive eyes, dynamic anime composition, studio quality, sharp cel shading"
+    },
+    {
+      "id": "photoreal",
+      "name": "Photorealistic",
+      "prompt": "photorealistic, ultra detailed, natural lighting and skin pores, shot on professional full-frame DSLR, 8k, realistic textures, subtle film grain"
+    },
+    {
+      "id": "fantasy",
+      "name": "Fantasy Art",
+      "prompt": "epic fantasy illustration, magical glows, intricate details, rich saturated palette, painterly, high fantasy concept art, volumetric god rays"
+    },
+    {
+      "id": "cyberpunk",
+      "name": "Cyberpunk",
+      "prompt": "cyberpunk neon city, rain reflections, holographic signs, high-tech low-life, dramatic rim lighting, blade runner aesthetic, moody blues and magentas"
+    },
+    {
+      "id": "horror",
+      "name": "Horror",
+      "prompt": "horror movie still, deep shadows, unsettling atmosphere, fog, high contrast chiaroscuro, eerie practical lighting, psychological dread"
+    },
+    {
+      "id": "watercolor",
+      "name": "Watercolor",
+      "prompt": "delicate watercolor illustration, soft bleeding edges, layered translucent washes, visible paper texture, artistic and light, beautiful color bleeding"
+    },
+    {
+      "id": "oil",
+      "name": "Oil Painting",
+      "prompt": "classical oil painting on canvas, rich impasto texture, dramatic renaissance lighting, visible brush strokes, museum quality fine art"
+    },
+    {
+      "id": "3d",
+      "name": "3D Render",
+      "prompt": "high-end 3D CGI render, octane/redshift quality, clean materials, studio product lighting, perfect reflections, ultra sharp, subsurface scattering"
+    },
+    {
+      "id": "pixel",
+      "name": "Pixel Art",
+      "prompt": "beautiful 16-bit / 32-bit pixel art, crisp pixels, limited but vibrant palette, retro game aesthetic, clean dithering, nostalgic charm"
+    },
+    {
+      "id": "surreal",
+      "name": "Surreal",
+      "prompt": "surreal dreamlike scene, impossible architecture, melting forms, symbolic, salvador dali influence, ethereal lighting, unexpected juxtapositions"
+    },
+    {
+      "id": "minimal",
+      "name": "Minimalist",
+      "prompt": "minimalist elegant composition, generous negative space, simple refined forms, muted harmonious palette, zen calm, graphic design precision"
+    },
+    {
+      "id": "vintage",
+      "name": "Vintage Film",
+      "prompt": "1970s vintage film photography, kodachrome colors, heavy film grain, slight fade, lens flare, warm nostalgic tones, analog photo look"
+    },
+    {
+      "id": "steampunk",
+      "name": "Steampunk",
+      "prompt": "intricate steampunk machinery, brass copper leather, victorian industrial, glowing gauges, dramatic side lighting, rich sepia and teal palette"
+    },
+    {
+      "id": "scifi",
+      "name": "Sci-Fi",
+      "prompt": "futuristic sci-fi concept art, sleek advanced tech, clean hard surface modeling, dramatic cinematic lighting, space opera scale, polished materials"
+    },
+    {
+      "id": "cartoon",
+      "name": "Cartoon",
+      "prompt": "modern vibrant cartoon style, bold clean outlines, saturated playful colors, expressive features, pixar/disney 3d cartoon influence, polished"
+    },
+    {
+      "id": "hyperreal",
+      "name": "Hyperrealistic",
+      "prompt": "hyperrealistic macro detail, insane texture fidelity, perfect anatomy and materials, razor sharp focus, controlled studio lighting"
+    },
+    {
+      "id": "darkmoody",
+      "name": "Dark Moody",
+      "prompt": "dark moody cinematic lighting, deep crushed blacks, low key, desaturated cool tones, heavy atmosphere, film noir tension"
+    },
+    {
+      "id": "epic",
+      "name": "Epic",
+      "prompt": "epic sweeping vista, heroic scale, majestic god rays, golden hour, national geographic level grandeur, awe-inspiring composition, ultra wide"
+    }
+  ]
+}
