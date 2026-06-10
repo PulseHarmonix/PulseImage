@@ -877,12 +877,10 @@ function renderLibraryMasonry(assets, targetContainer) {
     // Density selector buttons at the top of the image cards area
     // Sticky so buttons stay fixed at top of the card window
     const densityBar = document.createElement('div');
-    densityBar.className = 'flex gap-x-1 mb-1';
-    densityBar.style.position = 'sticky';
-    densityBar.style.top = '0';
+    densityBar.className = 'flex gap-x-1 mb-3 mt-2 px-1';
     densityBar.style.zIndex = '15';
     densityBar.style.backgroundColor = '#09090b';
-    densityBar.style.paddingTop = '2px';
+    densityBar.style.paddingTop = '30px';
     densityBar.style.paddingBottom = '2px';
     densityBar.style.marginTop = '0';  // minimal gap under titlebar
     densityBar.innerHTML = `
@@ -947,33 +945,30 @@ function renderLibraryMasonry(assets, targetContainer) {
 
     // Fixed fades at the top and bottom of the card window (the scroller viewport).
     // These stay fixed; the grid (cards) scrolls underneath them.
-    // Top fade
-    const topFade = document.createElement('div');
-    topFade.style.cssText = `
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 48px;
-        background: linear-gradient(to bottom, #09090b, transparent);
-        z-index: 20;
-        pointer-events: none;
-    `;
-    scroller.appendChild(topFade);
+    // Remove any existing fade elements first
+    document.querySelectorAll('.library-fade').forEach(el => el.remove());
 
-    // Bottom fade
-    const bottomFade = document.createElement('div');
-    bottomFade.style.cssText = `
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: 48px;
-        background: linear-gradient(to top, #09090b, transparent);
-        z-index: 20;
-        pointer-events: none;
-    `;
-    scroller.appendChild(bottomFade);
+    // Find the correct parent container
+    const container = document.getElementById('generations-container') || 
+                    document.querySelector('.library-scroller')?.parentElement;
+
+    if (!container) {
+        console.warn('Could not find generations-container for fade overlays');
+        return;
+    }
+
+    // Make sure the container can hold absolute positioned children
+    container.style.position = 'relative';
+
+    // Create top fade
+    const fadeTop = document.createElement('div');
+    fadeTop.className = 'library-fade library-fade-top';
+    container.appendChild(fadeTop);
+
+    // Create bottom fade
+    const fadeBottom = document.createElement('div');
+    fadeBottom.className = 'library-fade library-fade-bottom';
+    container.appendChild(fadeBottom);
 
     // Make sure grid layout is applied (in case)
     applyLibraryMasonryLayout();
@@ -990,6 +985,49 @@ function renderLibraryMasonry(assets, targetContainer) {
             }
         });
     });
+
+    // Ensure the fades are sized and positioned correctly
+    ensureLibraryFades();
+}
+
+function ensureLibraryFades() {
+    const container = document.getElementById('generations-container');
+    if (!container) return;
+
+    // Remove old fades if they exist
+    container.querySelectorAll('.library-fade').forEach(el => el.remove());
+
+    // Top fade
+    const fadeTop = document.createElement('div');
+    fadeTop.className = 'library-fade library-fade-top';
+    Object.assign(fadeTop.style, {
+        position: 'absolute',
+        top: '0',
+        left: '0',
+        right: '0',
+        height: '60px',
+        background: 'linear-gradient(to bottom, #09090b, transparent)',
+        pointerEvents: 'none',
+        zIndex: '30'
+    });
+    container.appendChild(fadeTop);
+
+    // Bottom fade
+    const fadeBottom = document.createElement('div');
+    fadeBottom.className = 'library-fade library-fade-bottom';
+    Object.assign(fadeBottom.style, {
+        position: 'absolute',
+        bottom: '0',
+        left: '0',
+        right: '0',
+        height: '60px',
+        background: 'linear-gradient(to top, #09090b, transparent)',
+        pointerEvents: 'none',
+        zIndex: '30'
+    });
+    container.appendChild(fadeBottom);
+
+    container.style.position = 'relative';
 }
 
 // ==================== PERSISTENCE ====================
@@ -2605,6 +2643,10 @@ function closeVideoModal() {
 // preview" (variations, i2v, etc.) continues to work with parent linking.
 
 function showPreviewForAsset(assetOrFilename) {
+    // Hide library fades
+    document.querySelectorAll('.library-fade').forEach(el => {
+        el.style.display = 'none';
+    });
     // Close any old full modals
     ['image-modal', 'video-modal'].forEach(id => {
         const m = document.getElementById(id);
@@ -2881,6 +2923,10 @@ function showPreviewForAsset(assetOrFilename) {
 }
 
 function hidePreviewAndRestoreLibrary() {
+    // Show library fades again
+    document.querySelectorAll('.library-fade').forEach(el => {
+        el.style.display = '';
+    });
     const previewPane = document.getElementById('preview-pane');
     if (previewPane) previewPane.style.display = 'none';
 

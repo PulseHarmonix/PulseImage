@@ -15,20 +15,18 @@
         /* Grey scrollbar for the library scroller — present from the very first render so
            the persistent .library-scroller is styled immediately and scroll position is
            remembered across preview <-> library transitions from the start. */
+        #generations-container {
+            position: relative;
+            height: 100%;           /* or whatever height you need */
+            overflow: hidden;       /* important so fades don't escape */
+        }
         .library-scroller {
-            scrollbar-width: thin;
-            scrollbar-color: #888 #333;
-        }
-        .library-scroller::-webkit-scrollbar {
-            width: 8px;
-            background: #333;
-        }
-        .library-scroller::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 4px;
-        }
-        .library-scroller::-webkit-scrollbar-thumb:hover {
-            background: #aaa;
+            /*scrollbar-width: thin;*/
+            /*scrollbar-color: #888 #333;*/
+            height: 100%;
+            overflow-y: auto;
+            position: relative;
+            z-index: 1;
         }
     </style>
 </head>
