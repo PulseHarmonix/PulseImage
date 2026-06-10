@@ -38,6 +38,7 @@ let currentView = 'home';  // 'home' | 'library' | 'project' | 'chat'
 
 // Library density for the new masonry view
 let libraryDensity = 'full'; // 'full' | 'compact'
+let libraryVideoObserver = null; // IntersectionObserver for pausing offscreen video cards in library when libraryVideoPlayback is 'play_loop'
 
 // Preview / detail view state (in-place "normal" view, not a full isolating overlay modal).
 // This lets us reuse the main bottom prompt bar (the one where rainbow already works reliably)
@@ -238,6 +239,57 @@ function startVirtualPlayhead() {
   _projectRafId = requestAnimationFrame(tick);
 }
 
+function initLibraryVideoObserver() {
+    if (libraryVideoObserver) return; // already created
+
+    libraryVideoObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const video = entry.target;
+
+            if (entry.isIntersecting) {
+                // Video is visible → load and play
+                if (video.dataset.src && !video.src) {
+                    video.src = video.dataset.src;
+                }
+
+                // Only autoplay if the setting allows it
+                if (typeof libraryVideoPlayback !== 'undefined' && libraryVideoPlayback === 'play_loop') {
+                    video.play().catch(() => {});
+                }
+            } else {
+                // Video is out of view → pause it
+                video.pause();
+            }
+        });
+    }, {
+        threshold: 0.25,           // Play when 25% of the video is visible
+        rootMargin: '0px 0px -50px 0px'
+    });
+}
+
+function observeLibraryVideos() {
+    initLibraryVideoObserver();
+
+    const scroller = document.querySelector('.library-scroller');
+    if (!scroller || !libraryVideoObserver) return;
+
+    const videos = scroller.querySelectorAll('video[data-src]');
+    videos.forEach(video => {
+        // Only observe videos that aren't already being observed
+        if (!video._observedByLibrary) {
+            libraryVideoObserver.observe(video);
+            video._observedByLibrary = true;
+        }
+    });
+}
+
+function cleanupLibraryVideoObserver() {
+    if (libraryVideoObserver) {
+        libraryVideoObserver.disconnect();
+        libraryVideoObserver = null;
+    }
+}
+
 function stopVirtualPlayhead() {
   stopProjectRafPlayhead();
   // _virtualCurrentTime keeps the paused position for resume
@@ -436,17 +488,14 @@ function createAssetCard(asset) {
   } else if (isVideo) {
     card.className = `${getAspectClass(asset.aspect_ratio || '3:2')} bg-zinc-900 rounded-sm overflow-hidden border border-zinc-800 relative`;
     const mediaUrl = `/videos/${asset.filename}`;
-    const playAttrs = (libraryVideoPlayback === 'play_loop')
-      ? 'autoplay loop muted playsinline'
-      : 'muted playsinline';
     card.innerHTML = `
-      <video src="${mediaUrl}" 
-             class="w-full h-full object-cover rounded-sm cursor-pointer" loading="lazy"
-             ${playAttrs}></video>
-      <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
-        ${(asset.metadata && asset.metadata.duration) ? asset.metadata.duration + 's • ' : ''}${asset.width}×${asset.height}
-      </div>
-    `;
+        <video data-src="${mediaUrl}"
+                class="w-full h-full object-cover rounded-sm cursor-pointer" loading="lazy"
+                muted playsinline loop></video>
+        <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
+            ${(asset.metadata && asset.metadata.duration) ? asset.metadata.duration + 's • ' : ''}${asset.width}×${asset.height}
+        </div>
+        `;
     const videoEl = card.querySelector('video');
     videoEl.onclick = (e) => {
       e.stopImmediatePropagation();
@@ -812,6 +861,9 @@ function renderLibraryMasonry(assets, targetContainer) {
     // Remove any legacy absolute fades from main-content so we only have the new inner ones
     cleanupLibraryFullHeight();
 
+    // Reset the video observer (will be re-applied to videos in the new masonry)
+    cleanupLibraryVideoObserver()
+
     // PERSISTENT SCROLLER SUPPORT (for scroll preservation):
     // If the target already contains a .library-scroller as a direct child, reuse it
     // and only clear/rebuild its inner content (density bar + masonry grid + fades).
@@ -988,6 +1040,9 @@ function renderLibraryMasonry(assets, targetContainer) {
 
     // Ensure the fades are sized and positioned correctly
     ensureLibraryFades();
+
+    // Finally, observe videos for play/pause
+    observeLibraryVideos()
 }
 
 function ensureLibraryFades() {
