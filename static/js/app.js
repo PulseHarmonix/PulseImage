@@ -4755,7 +4755,6 @@ function showHomeView() {
 function showLibraryView() {
     currentView = 'library';
     currentProject = null;
-
     // If we are currently in an in-place preview (detail), the sidebar "Library" button
     // (or any call to show the plain library grid) should exit the preview and show the
     // masonry of cards. The explicit Back button inside the preview does the same via
@@ -4764,10 +4763,8 @@ function showLibraryView() {
     if (currentPreviewAsset && typeof hidePreviewAndRestoreLibrary === 'function') {
         hidePreviewAndRestoreLibrary();
     }
-
     // Set header immediately (important for startup / first paint)
     updateMainHeaderForView('library');
-
     const mainContent = document.getElementById('main-content');
     if (mainContent) {
         // Remove Tailwind classes so the inspector/scroll tag never attaches to main-content.
@@ -4776,7 +4773,6 @@ function showLibraryView() {
         mainContent.style.padding = '0';  // full width for the cards
         mainContent.style.overflow = 'hidden';  // prevent double scrollbar; only .library-scroller scrolls
     }
-
     let genContainer = document.getElementById('generations-container');
     if (genContainer) {
         genContainer.style.display = 'flex';
@@ -4785,7 +4781,6 @@ function showLibraryView() {
         genContainer.style.minHeight = '0';
         genContainer.style.overflow = 'hidden';
     }
-
     // When the Library button (or showLibraryView for any reason) is used, re-enforce the
     // scroller styles on any existing .library-scroller. This prevents the button from
     // "removing" the grey scrollbar state (e.g. if some other view setup touched ancestors).
@@ -4794,6 +4789,7 @@ function showLibraryView() {
     if (existingScroller) {
         existingScroller.style.flex = '1 1 0%';
         existingScroller.style.minHeight = '0';
+        existingScroller.style.height = '100%';
         existingScroller.style.overflow = 'auto';
         existingScroller.style.paddingTop = '0';
         existingScroller.style.paddingBottom = '0';
@@ -4801,8 +4797,7 @@ function showLibraryView() {
         existingScroller.style.scrollbarWidth = 'thin';
         existingScroller.style.scrollbarColor = '#888 #333';
     }
-
-    // Also re-apply to mainContent and genContainer here for the Library button path.
+    // Consolidated flex/height enforcement for genContainer (single clean block)
     if (genContainer) {
         genContainer.style.display = 'flex';
         genContainer.style.flexDirection = 'column';
@@ -4810,12 +4805,9 @@ function showLibraryView() {
         genContainer.style.minHeight = '0';
         genContainer.style.overflow = 'hidden';
     }
-
     let placeholder = document.getElementById('placeholder');
-
     // Also ensure the early mainContent query for consistency with other view setups
     // (the padding/overflow was already handled just above)
-
     // Make sure header and prompt bar are "over" the faded full-height cards area
     const headerEl = document.querySelector('.flex.items-center.justify-between.px-6.py-4.border-b.border-zinc-800');
     if (headerEl) {
@@ -4832,7 +4824,6 @@ function showLibraryView() {
         // The .input-bar inside already has its bg, but ensure the container covers
         promptEl.style.backgroundColor = 'transparent';
     }
-
     // Close any open overlays (cue dialog, image/video modals) that may contain autoplay/looping videos.
     // These would otherwise continue decoding + RefreshDriver work even after leaving the project page.
     ['image-modal', 'video-modal', 'cue-dialog-overlay'].forEach(id => {
@@ -4845,7 +4836,6 @@ function showLibraryView() {
         }
     });
     document.body.style.overflow = '';
-
     // Cleanup project media (audio + any video thumbs/preview in the hidden editor subtree)
     // These can keep decoding/playing in background and contribute to high CPU (per Firefox profiler: RefreshDriver tick from HTMLMediaElement events).
     if (projectAudio) {
@@ -4881,7 +4871,6 @@ function showLibraryView() {
         });
         // Note: do not clear innerHTML here (renderProjectEditor will do full replace on re-enter)
     }
-
     // Clean up pan listeners to avoid accumulation across renders or after leaving project
     if (_projectPanMoveHandler) {
       document.removeEventListener('mousemove', _projectPanMoveHandler);
@@ -4889,15 +4878,12 @@ function showLibraryView() {
       _projectPanMoveHandler = null;
       _projectPanUpHandler = null;
     }
-
     // hide project editor
     const editor = document.getElementById('project-editor');
     if (editor) editor.classList.add('hidden');
-
     // Show bottom prompt bar (library only)
     const bottomBar = document.getElementById('bottom-prompt-bar');
     if (bottomBar) bottomBar.style.display = '';
-
     // show generations container + placeholder logic
     if (genContainer) genContainer.style.display = '';
     if (placeholder && (!hasGenerated || (allAssets && allAssets.length === 0))) {
@@ -4925,7 +4911,6 @@ function showLibraryView() {
         if (placeholder) mc.insertBefore(container, placeholder);
         else mc.appendChild(container);
         genContainer = container;  // update the hoisted reference
-
         // If we had to recreate the container, also make sure main-content is still clean
         // (prevents the overflow-y-auto class from re-attaching the scroll tag).
         mc.classList.remove('overflow-y-auto', 'px-6', 'pb-6');
@@ -4936,12 +4921,12 @@ function showLibraryView() {
         container.style.height = '100%';
         container.style.minHeight = '0';
         container.style.overflow = 'hidden';
-
         // Create the library-scroller eagerly inside the fresh container (flex sized).
         const scroller = document.createElement('div');
         scroller.className = 'library-scroller';
         scroller.style.flex = '1 1 0%';
         scroller.style.minHeight = '0';
+        scroller.style.height = '100%';
         scroller.style.overflow = 'auto';
         scroller.style.paddingTop = '0';
         scroller.style.paddingBottom = '0';
@@ -4959,7 +4944,6 @@ function showLibraryView() {
         // renderLibraryMasonry will hit the reuse path (innerHTML='' on the scroller) and build inside it.
         renderLibraryMasonry(allAssets, genContainer);
     }
-
     // Re-enforce scroller styles after any potential render guard above. Clicking the Library
     // sidebar button calls showLibraryView(); this ensures the grey scrollbar + proper flex
     // sizing stays on .library-scroller even if no re-render was needed.
@@ -4967,11 +4951,11 @@ function showLibraryView() {
     if (scrollerAfterGuards) {
         scrollerAfterGuards.style.flex = '1 1 0%';
         scrollerAfterGuards.style.minHeight = '0';
+        scrollerAfterGuards.style.height = '100%';
         scrollerAfterGuards.style.overflow = 'auto';
         scrollerAfterGuards.style.scrollbarWidth = 'thin';
         scrollerAfterGuards.style.scrollbarColor = '#888 #333';
     }
-
     // Make absolutely sure genContainer keeps the flex hosting setup after the guards too
     // (some code paths in showLibraryView set display etc. later).
     if (genContainer) {
@@ -4981,16 +4965,39 @@ function showLibraryView() {
         genContainer.style.minHeight = '0';
         genContainer.style.overflow = 'hidden';
     }
-
     // When activating library via the button (e.g. from Home), force a post-display layout pass.
     // This guarantees correct card positioning and that the scroller gets a real height so the
     // grey scrollbar appears (and the devtools scroll tag attaches to .library-scroller).
     if (currentView === 'library' && typeof applyLibraryMasonryLayout === 'function') {
+        // === Stronger first-render height fix ===
+        const doLayout = () => {
+            const scroller = document.querySelector('.library-scroller');
+            if (scroller) {
+                // Calculate available height (viewport minus header + prompt bar)
+                const header = document.querySelector('.flex.items-center.justify-between.px-6.py-4.border-b.border-zinc-800');
+                const promptBar = document.getElementById('bottom-prompt-bar');
+
+                const headerH = header ? header.offsetHeight : 60;
+                const promptH = promptBar ? promptBar.offsetHeight : 80;
+
+                const availableHeight = window.innerHeight - headerH - promptH;
+
+                scroller.style.height = `${Math.max(availableHeight, 400)}px`;
+                scroller.style.minHeight = '0';
+                scroller.style.flex = 'none';
+            }
+
+            if (typeof applyLibraryMasonryLayout === 'function') {
+                applyLibraryMasonryLayout();
+            }
+        };
+
+        // Run twice for reliability on first render
+        doLayout();
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => applyLibraryMasonryLayout());
+            doLayout();
         });
     }
-
     // Chat hygiene + bar restore
     const chatV = document.getElementById('chat-view');
     if (chatV) chatV.classList.add('hidden');
@@ -4999,7 +5006,6 @@ function showLibraryView() {
         homeV.style.display = 'none';
         homeV.classList.add('hidden');
     }
-
     // restore full bottom bar controls + main + handler + placeholder
     if (bottomBar) {
         const tr = bottomBar.querySelector('.flex.items-center.gap-x-2.mb-3');
@@ -5009,7 +5015,6 @@ function showLibraryView() {
             if (mg) Array.from(mg.children || []).forEach(ch => ch.style.display = '');
         }
     }
-
     // Ensure the main prompt bar's visual mode (image/video button active class + quick-options content)
     // matches the currentMode variable. The visibility restore above only restores display,
     // not the mode selection state. This prevents UI showing "image" while currentMode is "video"
@@ -5017,7 +5022,6 @@ function showLibraryView() {
     selectMode(currentMode);
     const aspectText = document.getElementById('aspect-ratio-text');
     if (aspectText) aspectText.innerText = currentAspectRatio;
-
     // Re-show in-place preview if one was active (e.g. after returning from project or chat).
     // This keeps the "detail view" state across view switches without losing the preview pane.
     if (currentPreviewAsset) {
@@ -5033,7 +5037,6 @@ function showLibraryView() {
       // Do NOT hide the main bottom prompt bar here: the in-place preview intentionally
       // keeps the library's bottom bar visible in the same position/size for rainbow + submit context.
     }
-
     // Only force-reset the + button to upload when we are NOT in an active in-place preview.
     // While preview is active, showPreviewForAsset (or its rewire) keeps + wired to showModifierPicker.
     if (!currentPreviewAsset) {
@@ -5050,9 +5053,7 @@ function showLibraryView() {
     }
     const _inp = document.getElementById('prompt-input');
     if (_inp) _inp.placeholder = 'Type to imagine';
-
     updateMainHeaderForView('library');
-
     // Density toggle button (appears in the mode group for the library view)
     setTimeout(() => {
         const topRow = document.querySelector('#bottom-prompt-bar .flex.items-center.gap-x-2.mb-3');
@@ -5078,10 +5079,8 @@ function showLibraryView() {
             }
         }
     }, 30);
-
     // Apply columns (in case density or size changed)
     applyLibraryMasonryLayout();
-
     // Keep columns correct on resize while in library
     if (!window._libraryResizeBound) {
         window._libraryResizeBound = true;
