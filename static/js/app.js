@@ -2923,6 +2923,11 @@ function showPreviewForAsset(assetOrFilename) {
 }
 
 function hidePreviewAndRestoreLibrary() {
+    // Pause ALL videos on the page when leaving preview
+    document.querySelectorAll('video').forEach(video => {
+        video.pause();
+    });
+
     // Show library fades again
     document.querySelectorAll('.library-fade').forEach(el => {
         el.style.display = '';
