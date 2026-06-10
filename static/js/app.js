@@ -441,7 +441,7 @@ function createAssetCard(asset) {
       : 'muted playsinline';
     card.innerHTML = `
       <video src="${mediaUrl}" 
-             class="w-full h-full object-cover rounded-sm cursor-pointer" 
+             class="w-full h-full object-cover rounded-sm cursor-pointer" loading="lazy"
              ${playAttrs}></video>
       <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
         ${(asset.metadata && asset.metadata.duration) ? asset.metadata.duration + 's • ' : ''}${asset.width}×${asset.height}
@@ -477,7 +477,7 @@ function createAssetCard(asset) {
     const mediaUrl = `/images/${asset.filename}`;
     card.innerHTML = `
       <img src="${mediaUrl}" 
-           class="w-full h-full object-cover rounded-sm cursor-pointer hover:opacity-90 transition-opacity" alt="">
+           class="w-full h-full object-cover rounded-sm cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" alt="">
       <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
         ${asset.width && asset.height ? `${asset.width}×${asset.height}` : ''}
       </div>
