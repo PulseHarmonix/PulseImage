@@ -1,6 +1,4 @@
 import json
-import httpx
-from typing import List, Dict, Any, Optional
 from config import get_ollama_settings
 
 async def ollama_story_breakdown(story_text: str, characters: list, num_scenes: int | None = None, target_seconds: float | None = None, style: str | None = None, debug: bool = False) -> dict:

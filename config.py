@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Any, Dict
 
 SETTINGS_FILE = "settings.json"
 
@@ -116,7 +115,7 @@ def get_ollama_settings() -> dict:
 
 def get_failed_gen_clear_seconds() -> int:
     """Return the configured timeout (in seconds) before a generation is considered failed.
-    This value is used as the loop bound (with 1s sleep) for history polling in comfy_client.py
+    This value is used as the loop bound (with 1s sleep) for history polling in comfy_service.py
     for both image and video generation paths (T2I, I2I, T2V, I2V, IA2V, etc.).
     """
     s = load_app_settings()

@@ -1,14 +1,12 @@
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 from services.project_service import (
     load_projects,
     save_project,
     update_project,
     delete_project,
 )
-from typing import Dict, Any
 
 router = APIRouter()
 

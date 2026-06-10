@@ -1,7 +1,7 @@
 import json
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from utils.comfy_client import (
+from services.comfy_service import (
     generate_images_with_progress,
     generate_videos_with_progress,
     generate_image_to_videos_with_progress,
@@ -21,7 +21,6 @@ from services.generation_service import (
     delete_generation,
     load_generations
 )
-from typing import Optional
 
 router = APIRouter()
 

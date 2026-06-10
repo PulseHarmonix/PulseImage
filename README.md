@@ -313,40 +313,48 @@ PROJECT STRUCTURE (OVERVIEW)
 
 
 PulseImage/
-
-├── main.py                 # FastAPI backend
-
+├── main.py
 ├── requirements.txt
-
 ├── settings.json
-
-├── library.json            # Generated assets metadata
-
-├── projects.json           # Saved projects + timelines
+├── library.json
+├── projects.json
+├── .gitignore
+├── README.md
 
 ├── utils/
+│   ├── workflow_utils.py
+│   └── video_workflow_utils.py
 
-│   ├── comfy\_client.py     # Communication with ComfyUI
+├── services/
+│   ├── comfy_service.py
+│   ├── generation_service.py
+│   ├── ollama_service.py
+│   ├── project_service.py
+│   ├── settings_service.py
+│   └── story_service.py
 
-│   ├── workflow\_utils.py
+├── routers/
+│   ├── comfy.py
+│   ├── generations.py
+│   ├── ollama.py
+│   ├── projects.py
+│   ├── settings.py
+│   ├── story.py
+│   └── uploads.py
 
-│   └── video\_workflow\_utils.py
-
-├── workflows/              # ComfyUI workflow JSON files
+├── workflows/
+│   └── *.json
 
 ├── templates/
-
 │   └── index.html
 
-├── static/js/
+├── static/
+│   └── js/
+│       └── app.js
 
-│   └── app.js              # Frontend application
-
-├── images/                 # Generated images
-
-├── videos/                 # Generated videos
-
-└── audio/                  # Uploaded audio files
+├── images/
+├── videos/
+└── audio/
 
 
 

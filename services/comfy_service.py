@@ -1,4 +1,4 @@
-# utils/comfy_client.py
+# services/comfy_service.py
 import httpx
 import os
 import uuid
@@ -12,7 +12,7 @@ try:
     from PIL import Image
 except ImportError:
     Image = None  # will fallback to 0,0 if not available
-from .workflow_utils import (
+from utils.workflow_utils import (
     load_base_workflow,
     modify_workflow,
     get_image_dimensions,
@@ -29,7 +29,7 @@ from .workflow_utils import (
     load_base_klein_double_image_to_image_workflow,
     modify_klein_double_image_to_image_workflow
 )
-from .video_workflow_utils import (
+from utils.video_workflow_utils import (
     load_base_video_workflow,
     modify_video_workflow,
     get_video_dimensions,

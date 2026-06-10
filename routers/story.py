@@ -6,13 +6,11 @@ import subprocess
 import tempfile
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse,JSONResponse
-from services.project_service import load_projects
 from services.generation_service import load_generations
 from services.story_service import (
     ollama_story_breakdown,
     ollama_scene_prompt,
 )
-from typing import Dict, Any, List, Optional
 
 # Optional OpenCV for pure-Python video trimming fallback (no system ffmpeg required).
 # Re-encodes, so slower and slightly lower quality than ffmpeg -c copy, but works everywhere.

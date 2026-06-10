@@ -1,5 +1,4 @@
 from fastapi import APIRouter, UploadFile, File
-from fastapi.responses import JSONResponse
 import shutil
 import os
 import uuid

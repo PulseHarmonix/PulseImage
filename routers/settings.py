@@ -8,8 +8,7 @@ from config import (
     get_ollama_settings,
 )
 from typing import Dict, Any
-
-available_loras: list = []
+from services.settings_service import available_loras, refresh_loras
 
 router = APIRouter()
 
@@ -68,15 +67,14 @@ async def post_settings(request: Request):
 
 @router.get("/loras")
 async def get_loras(refresh: bool = False):
-    """Return cached LoRAs (from /models/loras or fallback /object_info). ?refresh=true to re-query ComfyUI."""
-    global available_loras
+    """Return cached LoRAs. Use ?refresh=true to re-query ComfyUI."""
     if refresh:
-        try:
-            from utils.comfy_client import fetch_loras_from_comfy
-            available_loras = await fetch_loras_from_comfy()
-            print(f"[loras] Refreshed to {len(available_loras)} LoRAs (via /models/loras or fallback)")
-        except Exception as e:
-            print(f"[loras] refresh error: {e}")
+        loras = await refresh_loras()
+        print(f"[loras] Refreshed to {len(loras)} LoRAs")
+        return {"loras": loras}
+
+    # Normal case - get current value
+    from services.settings_service import available_loras
     return {"loras": available_loras or []}
 
 @router.get("/comfy/models")
@@ -85,7 +83,7 @@ async def get_comfy_models():
     Returns {connected: bool, checkpoints: [...], loras: [...], vaes: [...], clips: [...], upscalers: [...] }
     """
     try:
-        from utils.comfy_client import fetch_comfy_models
+        from services.comfy_service import fetch_comfy_models
         models = await fetch_comfy_models()
         return {"connected": True, **models}
     except Exception as e:
