@@ -26,6 +26,7 @@ router = APIRouter()
 
 @router.post("/generate")
 async def generate(data: dict):
+    """Generate images or videos based on the provided prompt and parameters."""
     prompt = data.get("prompt")
     resolution = data.get("resolution", "720p")
     aspect_ratio = data.get("aspect_ratio", "16:9")
@@ -61,12 +62,13 @@ async def generate(data: dict):
             return {"success": True, "results": [result]}
         else:
             # Image generation (default)
-            lora_strength = float(data.get("lora_strength", 0.8)) if data.get("lora_strength") is not None else 0.8
+            lora_strength = float(data.get("lora_strength", 0.6)) if data.get("lora_strength") is not None else 0.6
             results = await generate_multiple_images(prompt, resolution, aspect_ratio, count=count, image_model=image_model, qwen_turbo=qwen_turbo, lora_name=lora_name, lora_strength=lora_strength)
             return {"success": True, "results": results}
 
 @router.post("/generate/stream")
 async def generate_stream(data: dict):
+    """Stream generation progress via Server-Sent Events for images or videos."""
     prompt = data.get("prompt", "")
     resolution = data.get("resolution", "720p")
     aspect_ratio = data.get("aspect_ratio", "16:9")
@@ -80,7 +82,7 @@ async def generate_stream(data: dict):
     i2i_model = data.get("i2i_model", "klein")  # for modal image-to-image edits
     qwen_turbo = data.get("qwen_turbo", True)
     lora_name = data.get("lora_name")
-    lora_strength = float(data.get("lora_strength", 0.8)) if data.get("lora_strength") is not None else 0.8
+    lora_strength = float(data.get("lora_strength", 0.6)) if data.get("lora_strength") is not None else 0.6
 
     if not prompt:
         return JSONResponse({"success": False, "error": "Prompt required"}, status_code=400)
@@ -139,6 +141,7 @@ async def generate_stream(data: dict):
 
 @router.post("/save-generation")
 async def save_generation_endpoint(request: Request):
+    """Save a generated asset (image/video) to the library."""
     try:
         body = await request.body()
         raw = body.decode("utf-8", errors="ignore")
@@ -179,6 +182,7 @@ async def save_generation_endpoint(request: Request):
 
 @router.post("/update-generation")
 async def update_generation_endpoint(request: Request):
+    """Update an existing generation's metadata (e.g. favorite status)."""
     try:
         data = await request.json()
         asset_id = data.get("id")
@@ -200,6 +204,7 @@ async def update_generation_endpoint(request: Request):
 
 @router.post("/delete-generation")
 async def delete_generation_endpoint(request: Request):
+    """Delete a generation from the library, optionally cascading to derived assets."""
     try:
         data = await request.json()
         asset_id = data.get("id")
@@ -215,4 +220,5 @@ async def delete_generation_endpoint(request: Request):
 
 @router.get("/history")
 async def get_history():
+    """Return the full generation history from the library."""
     return load_generations()

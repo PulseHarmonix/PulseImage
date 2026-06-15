@@ -7,6 +7,7 @@ router = APIRouter()
 
 @router.post("/upload")
 async def upload_asset(file: UploadFile = File(...)):
+    """Upload an image or audio file and store it in the appropriate directory."""
     if not file.filename:
         return {"error": "No file provided"}
 

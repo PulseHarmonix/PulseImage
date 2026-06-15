@@ -3,232 +3,144 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pulse Image</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Pulse Image — Desktop</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
-        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        .input-bar {
-            background-color: #1f1f1f;
-            border: 1px solid #3f3f46;
-        }
-        /* Grey scrollbar for the library scroller — present from the very first render so
-           the persistent .library-scroller is styled immediately and scroll position is
-           remembered across preview <-> library transitions from the start. */
-        #generations-container {
-            position: relative;
-            height: 100%;           /* or whatever height you need */
-            overflow: hidden;       /* important so fades don't escape */
-        }
-        .library-scroller {
-            /*scrollbar-width: thin;*/
-            /*scrollbar-color: #888 #333;*/
-            height: 100%;
-            overflow-y: auto;
-            position: relative;
-            z-index: 1;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/index/css/style.css">
 </head>
-<body class="bg-zinc-950 text-white">
-    <div class="flex h-screen">
-        <!-- LEFT SIDEBAR (Projects + Library nav) -->
-        <aside id="sidebar" class="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col flex-shrink-0 overflow-y-auto">
-            <div class="px-4 pt-4 pb-3 border-b border-zinc-800">
-                <div class="flex items-center gap-x-3 mb-3">
-                    <div class="w-8 h-8 bg-white rounded-2xl flex items-center justify-center">
-                        <i class="fa-solid fa-bolt text-black text-xl"></i>
-                    </div>
-                    <div>
-                        <div class="font-semibold tracking-tight">Pulse Image</div>
-                    </div>
-                </div>
-                <!-- Home link (startup page) -->
-                <button onclick="showHomeView()"
-                        class="w-full flex items-center gap-x-2 px-3 py-2 rounded-xl text-sm hover:bg-zinc-800 text-left mb-1">
-                    <i class="fa-solid fa-home w-4"></i>
-                    <span>Home</span>
-                </button>
-                <!-- Library link -->
-                <button onclick="showLibraryView()"
-                        class="w-full flex items-center gap-x-2 px-3 py-2 rounded-xl text-sm hover:bg-zinc-800 text-left mb-1">
-                    <i class="fa-solid fa-th-large w-4"></i>
-                    <span>Library</span>
-                </button>
-                <!-- Chat link (new) -->
-                <button onclick="showChatView()"
-                        class="w-full flex items-center gap-x-2 px-3 py-2 rounded-xl text-sm hover:bg-zinc-800 text-left mb-1">
-                    <i class="fa-solid fa-robot w-4"></i>
-                    <span>Chat</span>
-                </button>
-            </div>
-
-            <!-- Projects section -->
-            <div class="px-3 pt-3 flex-1 flex flex-col min-h-0">
-                <div class="flex items-center justify-between px-1 mb-2">
-                    <div class="text-xs uppercase tracking-wider text-zinc-500 font-medium">Projects</div>
-                    <button onclick="createNewProject()"
-                            class="w-7 h-7 flex items-center justify-center rounded-full bg-emerald-600 hover:bg-emerald-500 text-white"
-                            title="New Project">
-                        <i class="fa-solid fa-plus text-xs"></i>
-                    </button>
-                </div>
-                <div id="project-list" class="flex-1 overflow-y-auto space-y-1 text-sm pr-1">
-                    <!-- Populated by JS: project list items -->
-                </div>
-                <div class="text-[10px] text-zinc-500 px-1 pt-2 pb-3">Click a project to open timeline + waveform</div>
-            </div>
-        </aside>
-
-        <!-- RIGHT COLUMN: header + content + status + bottom bar -->
-        <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
-            <!-- Header (global) -->
-            <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-                <div class="flex items-center gap-x-3">
-                    <div class="w-9 h-9 bg-white rounded-2xl flex items-center justify-center">
-                        <i class="fa-solid fa-bolt text-black text-2xl"></i>
-                    </div>
-                    <div>
-                        <h1 class="text-2xl font-semibold tracking-tight">Pulse Image</h1>
-                        <div id="header-project-name" class="text-[10px] text-emerald-400 -mt-1 hidden"></div>
-                    </div>
-                </div>
-                <div id="header-project-actions" class="hidden items-center gap-x-2 text-sm">
-                    <!-- Populated when in project: e.g. back button, project controls -->
+<body>
+    <!-- Menu Bar -->
+    <div id="menubar" class="menubar">
+        <div class="menubar-left">
+            <span class="menubar-brand"><i class="fa-solid fa-bolt"></i> Pulse Image</span>
+            <div class="menubar-item" id="menu-system">
+                <span>System</span>
+                <div class="menubar-dropdown" id="menu-system-dropdown">
+                    <div class="menu-item" data-action="servers"><i class="fa-solid fa-server"></i> Servers</div>
+                    <div class="menu-item" data-action="autoplay" id="menu-autoplay"><i class="fa-solid fa-play" id="menu-autoplay-icon" style="opacity:0.3"></i> Auto Play</div>
                 </div>
             </div>
-
-            <!-- Main Content Area (hosts library generations OR project editor) -->
-            <div class="flex-1 overflow-y-auto px-6 pb-6" id="main-content">
-                
-                <!-- Placeholder when nothing is generated (library) -->
-                <div id="placeholder" 
-                    class="flex flex-col items-center justify-center h-[50vh] text-zinc-500">
-                    <i class="fa-solid fa-magic text-6xl mb-4 opacity-60"></i>
-                    <p class="text-xl">What do you want to create?</p>
-                </div>
-
-                <!-- Project editor root (injected / toggled by JS when a project is selected) -->
-                <div id="project-editor" class="hidden">
-                    <!-- JS renders: preview + side play/stop, timeline-viz (halved waveform + clips strip + playhead), scrollbar, cue markers -->
-                </div>
-
-                <!-- Chat view (new) -->
-                <div id="chat-view" class="hidden flex-1 flex flex-col min-h-0">
-                    <div class="px-4 pt-3 pb-2 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/50">
-                        <div class="flex items-center gap-x-2">
-                            <i class="fa-solid fa-robot text-emerald-400"></i>
-                            <span class="font-semibold">Chat</span>
-                            <span id="chat-model-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400"></span>
-                        </div>
-                        <button onclick="clearCurrentChat()" class="text-xs px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700">Clear chat</button>
-                    </div>
-                    <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-4 space-y-4 text-sm"></div>
-                    <div id="chat-attachment-bar" class="px-4 pb-2 text-xs hidden"></div>
-                </div>
-
-                <!-- Home view (startup page with centered logo) -->
-                <div id="home-view" class="hidden flex-1 flex items-center justify-center bg-zinc-950">
-                    <img src="/static/images/home.jpg" alt="Pulse Imagine" style="max-width: 50vw; max-height: 50vh; width: auto; height: auto; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);" />
+            <div class="menubar-item" id="menu-generation">
+                <span>Generation</span>
+                <div class="menubar-dropdown" id="menu-generation-dropdown">
+                    <div class="menu-item" data-action="prompt-enhancers"><i class="fa-solid fa-wand-magic-sparkles"></i> Prompt Enhancers</div>
                 </div>
             </div>
-
-            <!-- Connection Status -->
-            <div id="connection-status" class="px-6 flex justify-center items-center h-6 text-sm"></div>
-
-            <!-- Bottom Input Bar (Grok Style) - always available for library gens; hidden on project editor page -->
-            <div id="bottom-prompt-bar" class="px-6 pb-6">
-                <div class="input-bar rounded-3xl px-4 py-3 shadow-xl">
-                    
-                    <!-- Top Row: Mode + Quick Options -->
-                    <div class="flex items-center gap-x-2 mb-3 flex-wrap">
-                        
-                        <!-- Mode Buttons -->
-                        <div class="flex items-center bg-zinc-800 rounded-full p-1 text-sm">
-                            <!-- Settings for image gen model (left of Image button) -->
-                            <button onclick="showImageModelSettings()" 
-                                    class="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-full transition-colors mr-0.5"
-                                    title="Image Generation Model">
-                                <i class="fa-solid fa-cog text-base"></i>
-                            </button>
-                            <button onclick="selectMode('image')" id="btn-image"
-                                    class="flex items-center gap-x-1.5 px-4 py-1.5 rounded-full bg-white text-black font-medium text-sm">
-                                <i class="fa-solid fa-image"></i>
-                                <span>Image</span>
-                            </button>
-                            <button onclick="selectMode('video')" id="btn-video"
-                                    class="flex items-center gap-x-1.5 px-4 py-1.5 rounded-full hover:bg-zinc-700 font-medium text-sm">
-                                <i class="fa-solid fa-video"></i>
-                                <span>Video</span>
-                            </button>
-                        </div>
-
-                        <!-- Quick Options (change based on mode) -->
-                        <div id="quick-options" class="flex items-center gap-x-2 text-sm">
-                            <!-- Populated by JavaScript -->
-                        </div>
-
-                        <!-- Aspect Ratio Button -->
-                        <div class="relative">
-                            <button onclick="toggleAspectRatioDropdown()" 
-                                    class="flex items-center gap-x-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-full text-sm font-medium">
-                                <span id="aspect-ratio-text">3:2</span>
-                                <i class="fa-solid fa-chevron-down text-xs"></i>
-                            </button>
-
-                            <!-- Aspect Ratio Dropdown -->
-                            <div id="aspect-dropdown" 
-                                 class="hidden absolute bottom-12 left-0 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-44 py-2 z-50 text-sm">
-                                <div onclick="selectAspectRatio('2:3', this)" class="px-4 py-2 hover:bg-zinc-800 cursor-pointer flex justify-between items-center">
-                                    <span>2:3 Tall</span>
-                                </div>
-                                <div onclick="selectAspectRatio('3:2', this)" class="px-4 py-2 hover:bg-zinc-800 cursor-pointer flex justify-between items-center bg-zinc-800">
-                                    <span>3:2 Wide</span>
-                                    <i class="fa-solid fa-check text-emerald-400"></i>
-                                </div>
-                                <div onclick="selectAspectRatio('1:1', this)" class="px-4 py-2 hover:bg-zinc-800 cursor-pointer">1:1 Square</div>
-                                <div onclick="selectAspectRatio('9:16', this)" class="px-4 py-2 hover:bg-zinc-800 cursor-pointer">9:16 Vertical</div>
-                                <div onclick="selectAspectRatio('16:9', this)" class="px-4 py-2 hover:bg-zinc-800 cursor-pointer">16:9 Widescreen</div>
-                            </div>
-                        </div>
-
-                        <!-- Prompt Enhancer (next to aspect) -->
-                        <div class="relative">
-                            <button onclick="toggleEnhancerDropdown()" 
-                                    class="flex items-center gap-x-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-full text-sm font-medium" title="Prompt enhancer (requires Ollama)">
-                                <span id="enhancer-text">No enhancement</span>
-                                <i class="fa-solid fa-chevron-down text-xs"></i>
-                            </button>
-                            <div id="enhancer-dropdown" 
-                                 class="hidden absolute bottom-12 left-0 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-48 py-1 z-50 text-sm">
-                                <!-- JS populated from promptEnhancers (shows all, no scrollbar) -->
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Input Row -->
-                    <div class="flex items-center gap-x-3">
-                        <!-- Plus Button -->
-                        <button class="w-9 h-9 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-full transition-colors">
-                            <i class="fa-solid fa-plus text-lg"></i>
-                        </button>
-
-                        <!-- Prompt Input -->
-                        <input type="text" id="prompt-input" 
-                               class="flex-1 bg-transparent outline-none text-white placeholder-zinc-400 text-[15px]"
-                               placeholder="Type to imagine">
-
-                        <!-- Send Arrow -->
-                        <button onclick="sendPrompt()"
-                                class="w-9 h-9 flex items-center justify-center bg-white text-black rounded-full hover:bg-zinc-200 transition-colors">
-                            <i class="fa-solid fa-arrow-up"></i>
-                        </button>
+            <div class="menubar-item" id="menu-admin">
+                <span>Admin</span>
+                <div class="menubar-dropdown" id="menu-admin-dropdown">
+                    <div class="menu-item" data-action="settings-editor"><i class="fa-solid fa-sliders"></i> Settings Editor</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-action="library-editor"><i class="fa-solid fa-th-large"></i> Library Editor</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-action="chat-history-editor"><i class="fa-solid fa-comments"></i> Chat History Editor</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-action="director-data-editor"><i class="fa-solid fa-clapperboard"></i> Director Data Editor</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-action="generate-thumbnails"><i class="fa-solid fa-image"></i> Generate All Thumbnails</div>
+                </div>
+            </div>
+            <div class="menubar-item" id="menu-models">
+                <span>Models</span>
+                <div class="menubar-dropdown" id="menu-models-dropdown">
+                    <div class="menu-item" data-action="image-gen"><i class="fa-solid fa-wand-magic-sparkles"></i> Image Generation</div>
+                    <div class="menu-item" data-action="image-edit"><i class="fa-solid fa-pen"></i> Image Edit</div>
+                    <div class="menu-item" data-action="loras"><i class="fa-solid fa-layer-group"></i> LoRAs</div>
+                    <div class="menu-item" data-action="workflow-models"><i class="fa-solid fa-cubes"></i> Workflow Models</div>
+                </div>
+            </div>
+            <div class="menubar-item" id="menu-theme">
+                <span><i class="fa-solid fa-palette" style="font-size:10px;margin-right:3px"></i> Theme</span>
+                <div class="menubar-dropdown" id="menu-theme-dropdown">
+                    <div class="menu-item" data-action="theme-dark"><i class="fa-solid fa-moon"></i> Dark Mode</div>
+                    <div class="menu-item" data-action="theme-light"><i class="fa-solid fa-sun"></i> Light Mode</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" id="menu-theme-custom"><i class="fa-solid fa-palette"></i> Custom <i class="fa-solid fa-chevron-right" style="margin-left:auto;font-size:8px"></i>
+                        <div class="submenu" id="theme-submenu"></div>
                     </div>
                 </div>
             </div>
         </div>
+        <div class="menubar-right">
+            <span class="menubar-status" id="menubar-comfy" title="ComfyUI"><i class="fa-solid fa-circle status-offline"></i> ComfyUI</span>
+            <span class="menubar-status" id="menubar-ollama" title="Ollama"><i class="fa-solid fa-circle status-offline"></i> Ollama</span>
+            <span id="menubar-clock" class="menubar-clock"></span>
+        </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <!-- Wallpaper behind everything -->
+    <div class="wallpaper"></div>
+
+    <!-- Desktop -->
+    <div id="desktop" class="desktop">
+        <!-- Desktop icons grid -->
+        <div id="desktop-icons" class="desktop-icons">
+            <div class="desk-icon" data-app="library" title="Library">
+                <div class="icon-box icon-box-green"><i class="fa-solid fa-th-large"></i></div>
+                <span>Library</span>
+            </div>
+            <div class="desk-icon" data-app="chat" title="Chat">
+                <div class="icon-box icon-box-violet"><i class="fa-solid fa-robot"></i></div>
+                <span>Chat</span>
+            </div>
+            <div class="desk-icon" data-app="director" title="Director">
+                <div class="icon-box icon-box-amber"><i class="fa-solid fa-clapperboard"></i></div>
+                <span>Director</span>
+            </div>
+        </div>
+
+        <!-- Window layer -->
+        <div id="window-layer" class="window-layer"></div>
+
+        <!-- Context / notification area -->
+        <div id="toast-container" class="toast-container"></div>
+    </div>
+
+    <!-- Bottom Prompt Bar -->
+    <div id="bottom-bar" class="bottom-bar">
+        <div class="bb-inner">
+            <div class="bb-row bb-options">
+                <div class="bb-mode-group">
+                    <button class="bb-mode active" data-mode="image"><i class="fa-solid fa-image"></i> Image</button>
+                    <button class="bb-mode" data-mode="video"><i class="fa-solid fa-video"></i> Video</button>
+                </div>
+                <div class="bb-res-group">
+                    <button class="bb-pill" data-res="480p">480p</button>
+                    <button class="bb-pill active" data-res="720p">720p</button>
+                    <button class="bb-pill" data-res="1080p">1080p</button>
+                </div>
+                <div class="bb-ar-wrap">
+                    <button class="bb-ar-btn" id="bb-ar-btn"><i class="fa-solid fa-image"></i> 3:2 <i class="fa-solid fa-chevron-down" style="font-size:8px;margin-left:2px"></i></button>
+                    <div class="bb-ar-menu" id="bb-ar-menu">
+                        <div class="bb-ar-option active" data-ar="3:2"><i class="fa-solid fa-image"></i> 3:2</div>
+                        <div class="bb-ar-option" data-ar="16:9"><i class="fa-solid fa-film"></i> 16:9</div>
+                        <div class="bb-ar-option" data-ar="1:1"><i class="fa-solid fa-square"></i> 1:1</div>
+                        <div class="bb-ar-option" data-ar="9:16"><i class="fa-solid fa-mobile-screen"></i> 9:16</div>
+                        <div class="bb-ar-option" data-ar="2:3"><i class="fa-solid fa-id-card"></i> 2:3</div>
+                    </div>
+                </div>
+                <div class="bb-duration-group" id="bb-duration-group" style="display:none">
+                    <button class="bb-duration-pill" data-dur="1">1s</button>
+                    <button class="bb-duration-pill active" data-dur="6">6s</button>
+                    <button class="bb-duration-pill" data-dur="10">10s</button>
+                    <button class="bb-duration-pill" data-dur="20">20s</button>
+                    <button class="bb-duration-pill" data-dur="30">30s</button>
+                    <button class="bb-duration-pill" data-dur="40">40s</button>
+                    <button class="bb-duration-pill" data-dur="50">50s</button>
+                    <button class="bb-duration-pill" data-dur="60">60s</button>
+                </div>
+                <div class="bb-enhance-wrap">
+                    <button class="bb-enhance-btn" id="bb-enhance-btn"><span id="bb-enhance-text">No enhancement</span> <i class="fa-solid fa-chevron-down" style="font-size:8px;margin-left:3px"></i></button>
+                    <div class="bb-enhance-menu" id="bb-enhance-menu"></div>
+                </div>
+            </div>
+            <div class="bb-row bb-input-row">
+                <button class="bb-plus"><i class="fa-solid fa-plus"></i></button>
+                <input type="text" id="bb-input" class="bb-input" placeholder="Type to image" autofocus>
+                <button id="bb-send" class="bb-send"><i class="fa-solid fa-arrow-up"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/index/js/app.js"></script>
 </body>
 </html>

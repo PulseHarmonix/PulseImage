@@ -48,6 +48,16 @@ Thumbs.db
 # User data / generated content (do not commit)
 library.json
 projects.json
+settings.json
+
+# Generated thumbnails
+thumbnails/
+
+# SQLite database
+pulseimage.db
+
+# Agents documentation
+AGENTS.md
 
 # EXCEPTION: Keep the home image for the homepage
 !static/images/home.jpg

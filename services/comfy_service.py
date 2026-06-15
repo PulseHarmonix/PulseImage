@@ -5,7 +5,7 @@ import uuid
 import json
 import asyncio
 
-from typing import Optional
+from typing import Optional, AsyncGenerator
 
 # Lazy import PIL only when needed for i2i dimensions
 try:
@@ -50,17 +50,9 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
 
 def get_comfyui_url() -> str:
-    """Return the current ComfyUI base URL from settings.json (falls back to localhost)."""
-    try:
-        if os.path.exists("settings.json"):
-            with open("settings.json", "r", encoding="utf-8") as f:
-                s = json.load(f)
-                url = s.get("comfyui_url")
-                if isinstance(url, str) and url.strip():
-                    return url.strip().rstrip("/")
-    except Exception:
-        pass
-    return "http://127.0.0.1:8188"
+    """Return the current ComfyUI base URL from the database (falls back to localhost)."""
+    from config import get_comfyui_url as config_get_comfyui_url
+    return config_get_comfyui_url()
 
 
 async def check_comfyui_connection() -> bool:
@@ -347,22 +339,26 @@ async def download_and_save_image(filename: str, subfolder: str = "") -> str | N
         return None
 
 
-async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.8):
+async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.6) -> dict:
+    """Generate a single image from a text prompt using the specified ComfyUI workflow model"""
     print(">>> generate_single_image started")
 
     try:
         width, height = get_image_dimensions(resolution, aspect_ratio)
         if lora_name:
-            # LoRA takes precedence (Flux Schnell + LoRA workflow); only supported for schnell
+            print(f">>> workflow: LoRA ({lora_name.split('.')[0]})")
             base_workflow = load_base_lora_workflow()
             workflow = modify_lora_workflow(base_workflow, prompt, width, height, lora_name, strength_model=lora_strength, strength_clip=lora_strength)
         elif image_model == "klein":
+            print(">>> workflow: Klein")
             base_workflow = load_base_klein_workflow()
             workflow = modify_klein_workflow(base_workflow, prompt, width, height)
         elif image_model == "qwen":
+            print(">>> workflow: Qwen")
             base_workflow = load_base_qwen_workflow()
             workflow = modify_qwen_workflow(base_workflow, prompt, width, height, enable_turbo=qwen_turbo)
         else:
+            print(">>> workflow: Schnell")
             base_workflow = load_base_workflow()
             workflow = modify_workflow(base_workflow, prompt, width, height)
 
@@ -438,7 +434,8 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
         return {"success": False, "error": str(e)}
 
 
-async def generate_multiple_images(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.8):
+async def generate_multiple_images(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.6) -> list[dict]:
+    """Generate multiple images by calling generate_single_image in a loop"""
     results = []
     for i in range(count):
         print(f"\n--- Generating image {i+1}/{count} ---")
@@ -447,7 +444,8 @@ async def generate_multiple_images(prompt: str, resolution: str, aspect_ratio: s
     return results
 
 
-async def generate_images_with_progress(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.8):
+async def generate_images_with_progress(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.6) -> AsyncGenerator[str, None]:
+    """Generate multiple images as an async generator, yielding SSE progress events for each"""
     for i in range(count):
         # Tell frontend this card has started
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
@@ -498,6 +496,7 @@ async def generate_images_with_progress(prompt: str, resolution: str, aspect_rat
 
 
 async def download_and_save_video(filename: str, subfolder: str = "") -> str | None:
+    """Download a video file from ComfyUI output by filename and save it to the local videos folder"""
     if not filename:
         return None
 
@@ -605,7 +604,8 @@ async def upload_audio_to_comfy(local_filename: str) -> str | None:
         return None
 
 
-async def generate_single_video(prompt: str, resolution: str, aspect_ratio: str, duration: int):
+async def generate_single_video(prompt: str, resolution: str, aspect_ratio: str, duration: int) -> dict:
+    """Generate a single video from a text prompt using the video workflow and download the result"""
     print("\n>>> [VIDEO] generate_single_video started")
 
     try:
@@ -696,7 +696,7 @@ async def generate_single_image_to_video(
     resolution: str,
     aspect_ratio: str,
     duration: int
-):
+) -> dict:
     """
     Generate a video from a source image using the LTX 2.3 image-to-video workflow.
     - Uploads the source image to ComfyUI
@@ -800,7 +800,7 @@ async def generate_single_image_audio_to_video(
     resolution: str,
     aspect_ratio: str,
     duration: int
-):
+) -> dict:
     """
     Generate a video from a source image + audio modifier using the LTX 2.3 image-audio-to-video workflow.
     - Uploads the source image and the audio file to ComfyUI
@@ -907,7 +907,7 @@ async def generate_single_image_to_image(
     source_image_filename: str,
     prompt: str,
     i2i_model: str = "klein"
-):
+) -> dict:
     """
     Generate an image from a source image using the selected i2i workflow (Flux 2 or Flux 2 Klein).
     - Uploads the source image to ComfyUI
@@ -1034,7 +1034,7 @@ async def generate_image_to_images_with_progress(
     prompt: str,
     count: int = 1,
     i2i_model: str = "klein"
-):
+) -> AsyncGenerator[str, None]:
     """Progress wrapper for image-to-image generation from modal prompt bar (adjustment prompt)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
@@ -1083,7 +1083,7 @@ async def generate_double_image_to_image(
     main_image_filename: str,
     second_image_filename: str,
     prompt: str
-):
+) -> dict:
     """
     Generate an image from two reference images + prompt using the Flux2 Klein double i2i workflow.
     - Uploads both source images to ComfyUI (main as 1st ref, modifier as 2nd ref)
@@ -1196,7 +1196,7 @@ async def generate_double_image_to_image_with_progress(
     second_image_filename: str,
     prompt: str,
     count: int = 1
-):
+) -> AsyncGenerator[str, None]:
     """Progress wrapper for double image-to-image (2 refs + prompt) from modal when modifier image selected in image mode."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
@@ -1241,7 +1241,7 @@ async def generate_double_image_to_image_with_progress(
             })}\n\n"
 
 
-async def generate_videos_with_progress(prompt: str, resolution: str, aspect_ratio: str, duration: int, count: int = 1):
+async def generate_videos_with_progress(prompt: str, resolution: str, aspect_ratio: str, duration: int, count: int = 1) -> AsyncGenerator[str, None]:
     """Progress wrapper for text-to-video (used from library page video mode)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
@@ -1284,7 +1284,7 @@ async def generate_image_to_videos_with_progress(
     aspect_ratio: str,
     duration: int,
     count: int = 1
-):
+) -> AsyncGenerator[str, None]:
     """Progress wrapper for image-to-video generation (used from modal 'Create Video From this')."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
@@ -1328,7 +1328,7 @@ async def generate_image_audio_to_videos_with_progress(
     aspect_ratio: str,
     duration: int,
     count: int = 1
-):
+) -> AsyncGenerator[str, None]:
     """Progress wrapper for image+audio-to-video generation (used when audio modifier + video selected in modal)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"

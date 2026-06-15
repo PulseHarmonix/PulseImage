@@ -1,58 +1,7 @@
 import json
-import os
 
-SETTINGS_FILE = "settings.json"
-
-def load_app_settings() -> dict:
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                s = json.load(f)
-                if "image_model" not in s or s["image_model"] not in ("schnell", "klein", "qwen"):
-                    s["image_model"] = "schnell"
-                if "i2i_model" not in s or s["i2i_model"] not in ("klein", "flux2"):
-                    s["i2i_model"] = "klein"
-                if "library_video_playback" not in s or s["library_video_playback"] not in ("1st_frame", "play_loop"):
-                    s["library_video_playback"] = "1st_frame"
-                if "qwen_turbo" not in s or not isinstance(s.get("qwen_turbo"), bool):
-                    s["qwen_turbo"] = True
-                # Server connection settings (moved from config.py)
-                if "comfyui_url" not in s or not isinstance(s.get("comfyui_url"), str) or not s.get("comfyui_url").strip():
-                    s["comfyui_url"] = "http://127.0.0.1:8188"
-                if "ollama_url" not in s or not isinstance(s.get("ollama_url"), str) or not s.get("ollama_url").strip():
-                    s["ollama_url"] = "http://127.0.0.1:11434"
-                if "ollama_model" not in s or not isinstance(s.get("ollama_model"), str) or not s.get("ollama_model").strip():
-                    s["ollama_model"] = "qwen3:8b"
-                if "ollama_timeout" not in s or not isinstance(s.get("ollama_timeout"), (int, float)) or s.get("ollama_timeout") <= 0:
-                    s["ollama_timeout"] = 180
-                if "failed_gen_clear_seconds" not in s or not isinstance(s.get("failed_gen_clear_seconds"), (int, float)) or s.get("failed_gen_clear_seconds") <= 0:
-                    s["failed_gen_clear_seconds"] = 600
-                if "prompt_enhancers" not in s or not isinstance(s.get("prompt_enhancers"), list) or len(s.get("prompt_enhancers", [])) == 0:
-                    s["prompt_enhancers"] = [
-                        {"id": "none", "name": "No enhancement", "prompt": ""},
-                        {"id": "cinematic", "name": "Cinematic", "prompt": "cinematic lighting, dramatic composition, film grain, anamorphic lens, color graded, shot on 35mm, high production value, moody atmosphere"},
-                        {"id": "anime", "name": "Anime", "prompt": "detailed anime style, clean linework, vibrant colors, expressive eyes, dynamic anime composition, studio quality, sharp cel shading"},
-                        {"id": "photoreal", "name": "Photorealistic", "prompt": "photorealistic, ultra detailed, natural lighting and skin pores, shot on professional full-frame DSLR, 8k, realistic textures, subtle film grain"},
-                        {"id": "fantasy", "name": "Fantasy Art", "prompt": "epic fantasy illustration, magical glows, intricate details, rich saturated palette, painterly, high fantasy concept art, volumetric god rays"},
-                        {"id": "cyberpunk", "name": "Cyberpunk", "prompt": "cyberpunk neon city, rain reflections, holographic signs, high-tech low-life, dramatic rim lighting, blade runner aesthetic, moody blues and magentas"},
-                        {"id": "horror", "name": "Horror", "prompt": "horror movie still, deep shadows, unsettling atmosphere, fog, high contrast chiaroscuro, eerie practical lighting, psychological dread"},
-                        {"id": "watercolor", "name": "Watercolor", "prompt": "delicate watercolor illustration, soft bleeding edges, layered translucent washes, visible paper texture, artistic and light, beautiful color bleeding"},
-                        {"id": "oil", "name": "Oil Painting", "prompt": "classical oil painting on canvas, rich impasto texture, dramatic renaissance lighting, visible brush strokes, museum quality fine art"},
-                        {"id": "3d", "name": "3D Render", "prompt": "high-end 3D CGI render, octane/redshift quality, clean materials, studio product lighting, perfect reflections, ultra sharp, subsurface scattering"},
-                        {"id": "pixel", "name": "Pixel Art", "prompt": "beautiful 16-bit / 32-bit pixel art, crisp pixels, limited but vibrant palette, retro game aesthetic, clean dithering, nostalgic charm"},
-                        {"id": "surreal", "name": "Surreal", "prompt": "surreal dreamlike scene, impossible architecture, melting forms, symbolic, salvador dali influence, ethereal lighting, unexpected juxtapositions"},
-                        {"id": "minimal", "name": "Minimalist", "prompt": "minimalist elegant composition, generous negative space, simple refined forms, muted harmonious palette, zen calm, graphic design precision"},
-                        {"id": "vintage", "name": "Vintage Film", "prompt": "1970s vintage film photography, kodachrome colors, heavy film grain, slight fade, lens flare, warm nostalgic tones, analog photo look"},
-                        {"id": "steampunk", "name": "Steampunk", "prompt": "intricate steampunk machinery, brass copper leather, victorian industrial, glowing gauges, dramatic side lighting, rich sepia and teal palette"},
-                        {"id": "scifi", "name": "Sci-Fi", "prompt": "futuristic sci-fi concept art, sleek advanced tech, clean hard surface modeling, dramatic cinematic lighting, space opera scale, polished materials"},
-                        {"id": "cartoon", "name": "Cartoon", "prompt": "modern vibrant cartoon style, bold clean outlines, saturated playful colors, expressive features, pixar/disney 3d cartoon influence, polished"},
-                        {"id": "hyperreal", "name": "Hyperrealistic", "prompt": "hyperrealistic macro detail, insane texture fidelity, perfect anatomy and materials, razor sharp focus, controlled studio lighting"},
-                        {"id": "darkmoody", "name": "Dark Moody", "prompt": "dark moody cinematic lighting, deep crushed blacks, low key, desaturated cool tones, heavy atmosphere, film noir tension"},
-                        {"id": "epic", "name": "Epic", "prompt": "epic sweeping vista, heroic scale, majestic god rays, golden hour, national geographic level grandeur, awe-inspiring composition, ultra wide"}
-                    ]
-                return s
-        except Exception:
-            pass
+def _get_defaults() -> dict:
+    """Return the default settings dictionary with all factory values."""
     return {
         "image_model": "schnell",
         "i2i_model": "klein",
@@ -63,6 +12,11 @@ def load_app_settings() -> dict:
         "ollama_model": "qwen3:8b",
         "ollama_timeout": 180,
         "failed_gen_clear_seconds": 600,
+        "library_density": "full",
+        "library_filters": ["image"],
+        "window_states": {},
+        "theme": "macOS Dark",
+        "customTheme": None,
         "prompt_enhancers": [
             {"id": "none", "name": "No enhancement", "prompt": ""},
             {"id": "cinematic", "name": "Cinematic", "prompt": "cinematic lighting, dramatic composition, film grain, anamorphic lens, color graded, shot on 35mm, high production value, moody atmosphere"},
@@ -87,12 +41,63 @@ def load_app_settings() -> dict:
         ]
     }
 
-def save_app_settings(settings: dict):
+
+def _apply_defaults(s: dict) -> dict:
+    """Fill any missing or invalid keys in s with factory defaults."""
+    defaults = _get_defaults()
+    for key, default_val in defaults.items():
+        if key not in s or s[key] is None:
+            s[key] = default_val
+        elif key == "image_model" and s[key] not in ("schnell", "klein", "qwen"):
+            s[key] = default_val
+        elif key == "i2i_model" and s[key] not in ("klein", "flux2"):
+            s[key] = default_val
+        elif key == "library_video_playback" and s[key] not in ("1st_frame", "play_loop"):
+            s[key] = default_val
+        elif key == "qwen_turbo" and not isinstance(s[key], bool):
+            s[key] = default_val
+        elif key in ("comfyui_url", "ollama_url", "ollama_model") and (not isinstance(s[key], str) or not s[key].strip()):
+            s[key] = default_val
+        elif key in ("ollama_timeout", "failed_gen_clear_seconds") and (not isinstance(s[key], (int, float)) or s[key] <= 0):
+            s[key] = default_val
+        elif key == "library_density" and s[key] not in ("full", "compact"):
+            s[key] = default_val
+        elif key == "library_filters" and not isinstance(s[key], list):
+            s[key] = default_val
+        elif key == "window_states" and not isinstance(s[key], dict):
+            s[key] = default_val
+        elif key == "prompt_enhancers" and (not isinstance(s[key], list) or len(s[key]) == 0):
+            s[key] = default_val
+    return s
+
+
+def _parse_db_val(v: str) -> object:
+    """Try to parse a DB value as JSON; return raw string on failure."""
+    if v is None:
+        return None
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-    except Exception as e:
-        print("Failed to save settings:", e)
+        return json.loads(v)
+    except (json.JSONDecodeError, TypeError):
+        return v
+
+
+def load_app_settings() -> dict:
+    """Load settings from the DB, apply defaults, and return the merged dict."""
+    try:
+        from services.database_service import get_db
+        conn = get_db()
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        conn.close()
+        if rows:
+            s = {}
+            for r in rows:
+                s[r["key"]] = _parse_db_val(r["value"])
+            return _apply_defaults(s)
+    except Exception:
+        pass
+
+    return _get_defaults()
+
 
 def get_comfyui_url() -> str:
     """Return the current ComfyUI base URL from settings (or sensible default)."""

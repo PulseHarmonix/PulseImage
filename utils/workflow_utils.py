@@ -35,6 +35,7 @@ def load_base_lora_workflow() -> dict:
 
 
 def modify_workflow(workflow: dict, prompt: str, width: int, height: int) -> dict:
+    """Deep-copy the base Flux Schnell workflow and inject the prompt, dimensions, and a random seed"""
     wf = copy.deepcopy(workflow)
 
     # Inject prompt
