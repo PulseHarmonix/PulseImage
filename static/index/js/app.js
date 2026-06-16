@@ -949,6 +949,8 @@ function ensureRainbowBorderStyles() {
 // ============================================================
 let _genToastState = { pending: 0, cards: [] };
 let _isGenerating = false;
+let _genQueue = [];
+let _isProcessingQueue = false;
 
 function showGenToastPanel(count) {
   let panel = document.getElementById('gen-toast-panel');
@@ -985,8 +987,9 @@ function fillGenToastCard(idx, innerHTML, onDone) {
       if (_genToastState.pending <= 0) {
         const p = document.getElementById('gen-toast-panel');
         if (p) p.remove();
-        document.querySelector('.bb-inner')?.classList.remove('is-generating');
-        _isGenerating = false;
+        if (!_genQueue.length) {
+          document.querySelector('.bb-inner')?.classList.remove('is-generating');
+        }
       }
     }, { once: true });
   }, 1500);
@@ -1785,6 +1788,7 @@ function renderLibrary(wid) {
         const el = document.createElement('video');
         el.dataset.src = url; el.muted = true; el.loop = true; el.playsinline = true; el.preload = 'metadata';
         el.poster = thumbUrl;
+        el.onerror = function() { this.style.display = 'none'; };
         el.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;position:relative;z-index:1';
         card.appendChild(el);
       }
@@ -3499,50 +3503,85 @@ async function init() {
 }
 
 async function bbSend() {
-  if (_isGenerating) return;
   const input = document.getElementById('bb-input');
   let prompt = input.value.trim();
   if (!prompt) return;
 
-  _isGenerating = true;
+  // Show rainbow immediately
   document.querySelector('.bb-inner')?.classList.add('is-generating');
 
-  // Find library window for later refresh
-  const libEntry = Object.entries(windows).find(([id, w]) => w.title === 'Library');
-  const libWid = libEntry ? libEntry[0] : null;
+  // Capture attachments immediately (before async enhancement)
+  const attImages = _bbAttachments.filter(a => a.type === 'image');
+  const attAudio = _bbAttachments.find(a => a.type === 'audio');
+  const attLora = _bbAttachments.find(a => a.type === 'lora');
 
-  // Optionally enhance prompt via Ollama
+  // Create job snapshot and queue it now so badge shows +1 immediately
+  const job = {
+    id: Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+    prompt,
+    mode: bbMode,
+    resolution: bbRes,
+    aspect_ratio: bbAr,
+    duration: bbDuration,
+    attImages: attImages.map(a => ({ id: a.id, name: a.name, type: a.type })),
+    attAudio: attAudio ? { id: attAudio.id, name: attAudio.name, type: attAudio.type } : null,
+    attLora: attLora ? { id: attLora.id, name: attLora.name, type: attLora.type } : null,
+  };
+
+  _genQueue.push(job);
+  updateQueueBadge();
+  // Keep input and attachments so user can tweak and re-submit
+
+  // Now run enhancement (updates job.prompt already in queue)
   if (bbEnhancer && bbEnhancer !== 'none' && isOllamaConnected) {
     const enh = bbEnhancersList.find(e => e.id === bbEnhancer);
     if (enh && enh.prompt) {
       try {
         const res = await apiPost('/ollama/enhance', { prompt, enhancer: enh.prompt });
-        if (res.enhanced) prompt = res.enhanced;
+        if (res.enhanced) job.prompt = res.enhanced;
       } catch (e) { /* fall back to original prompt */ }
     }
   }
 
-  const attImages = _bbAttachments.filter(a => a.type === 'image');
-  const attAudio = _bbAttachments.find(a => a.type === 'audio');
-  const attLora = _bbAttachments.find(a => a.type === 'lora');
+  // Start processing (jobs run sequentially)
+  if (!_isProcessingQueue) processNext();
+}
 
-  if (bbMode === 'image') {
+function getLibWid() {
+  const entry = Object.entries(windows).find(([id, w]) => w.title === 'Library');
+  return entry ? entry[0] : null;
+}
+
+async function refreshLibraryFromDB() {
+  const w = getLibWid();
+  if (!w) return;
+  try {
+    const assets = await apiGet('/history');
+    allAssets = assets || [];
+    _libCache.assets = allAssets;
+    _libCache.childrenMap = buildChildrenMap(allAssets);
+    renderLibrary(w);
+  } catch (_) {}
+}
+
+async function runJob(job) {
+
+  if (job.mode === 'image') {
     let count;
-    const bodyPayload = { prompt, resolution: bbRes, aspect_ratio: bbAr, mode: 'image' };
-    if (attLora) bodyPayload.lora_name = attLora.name;
-    if (attImages.length === 2) {
+    const bodyPayload = { prompt: job.prompt, resolution: job.resolution, aspect_ratio: job.aspect_ratio, mode: 'image' };
+    if (job.attLora) bodyPayload.lora_name = job.attLora.name;
+    if (job.attImages.length === 2) {
       count = 1;
-      bodyPayload.source_image = attImages[0].name;
-      bodyPayload.modifier_image = attImages[1].name;
-    } else if (attImages.length === 1) {
+      bodyPayload.source_image = job.attImages[0].name;
+      bodyPayload.modifier_image = job.attImages[1].name;
+    } else if (job.attImages.length === 1) {
       count = 1;
-      bodyPayload.source_image = attImages[0].name;
+      bodyPayload.source_image = job.attImages[0].name;
     } else {
       count = 4;
     }
     bodyPayload.count = count;
     showGenToastPanel(count);
-    document.querySelector('.bb-inner')?.classList.add('is-generating');
 
     try {
       const r = await fetch('/generate/stream', {
@@ -3565,19 +3604,26 @@ async function bbSend() {
           const ev = JSON.parse(line.substring(6));
           if (ev.type === 'image_ready' && idx < count) {
             try {
-              await apiPost('/save-generation', {
-                prompt, filename: ev.local_filename, type: 'image',
-                aspect_ratio: bbAr, width: ev.width || 0, height: ev.height || 0,
-                parent_id: attImages.length ? attImages[0].id : undefined
+              const saved = await apiPost('/save-generation', {
+                prompt: job.prompt, filename: ev.local_filename, type: 'image',
+                aspect_ratio: job.aspect_ratio, width: ev.width || 0, height: ev.height || 0,
+                parent_id: job.attImages.length ? job.attImages[0].id : undefined
               });
+              if (saved && saved.id) {
+                allAssets.unshift({ id: saved.id, type: 'image', filename: ev.local_filename, prompt: job.prompt, width: ev.width || 0, height: ev.height || 0, aspect_ratio: job.aspect_ratio });
+                _libCache.assets = allAssets;
+                _libCache.childrenMap = buildChildrenMap(allAssets);
+              }
             } catch (_) {}
             const badge = ev.width && ev.height ? `${ev.width}x${ev.height}` : '';
             const html = `<img src="/images/${ev.local_filename}" loading="lazy">${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
-            fillGenToastCard(idx, html, () => refreshLibraryScrollPreserved(libWid));
+            fillGenToastCard(idx, html, () => refreshLibraryFromDB());
             idx++;
           }
         }
       }
+      // Final library sync from DB once all results are in
+      if (idx > 0) await refreshLibraryFromDB();
       if (idx === 0) {
         showToast('Generation returned no results', 'error');
         cleanupGenToast();
@@ -3589,15 +3635,14 @@ async function bbSend() {
   } else {
     // Video mode
     showGenToastPanel(1);
-    document.querySelector('.bb-inner')?.classList.add('is-generating');
 
-    const vidPayload = { prompt, resolution: bbRes, aspect_ratio: bbAr, mode: 'video', duration: bbDuration };
-    if (attLora) vidPayload.lora_name = attLora.name;
-    if (attAudio && attImages.length === 1) {
-      vidPayload.source_image = attImages[0].name;
-      vidPayload.modifier_audio = attAudio.name;
-    } else if (attImages.length === 1) {
-      vidPayload.source_image = attImages[0].name;
+    const vidPayload = { prompt: job.prompt, resolution: job.resolution, aspect_ratio: job.aspect_ratio, mode: 'video', duration: job.duration };
+    if (job.attLora) vidPayload.lora_name = job.attLora.name;
+    if (job.attAudio && job.attImages.length === 1) {
+      vidPayload.source_image = job.attImages[0].name;
+      vidPayload.modifier_audio = job.attAudio.name;
+    } else if (job.attImages.length === 1) {
+      vidPayload.source_image = job.attImages[0].name;
     }
     try {
       const res = await apiPost('/generate', vidPayload);
@@ -3606,18 +3651,24 @@ async function bbSend() {
           const r = res.results[idx];
           if (r.success) {
             try {
-              await apiPost('/save-generation', {
-                prompt, filename: r.local_filename, type: 'video',
-                aspect_ratio: bbAr, width: r.width || 0, height: r.height || 0,
+              const saved = await apiPost('/save-generation', {
+                prompt: job.prompt, filename: r.local_filename, type: 'video',
+                aspect_ratio: job.aspect_ratio, width: r.width || 0, height: r.height || 0,
                 duration: r.duration || null,
-                parent_id: attImages.length ? attImages[0].id : undefined
+                parent_id: job.attImages.length ? job.attImages[0].id : undefined
               });
+              if (saved && saved.id) {
+                allAssets.unshift({ id: saved.id, type: 'video', filename: r.local_filename, prompt: job.prompt, width: r.width || 0, height: r.height || 0, duration: r.duration, aspect_ratio: job.aspect_ratio });
+                _libCache.assets = allAssets;
+                _libCache.childrenMap = buildChildrenMap(allAssets);
+              }
             } catch (_) {}
             const badge = r.duration ? `${r.duration}s` : '';
             const html = `<video src="/videos/${r.local_filename}" muted loop autoplay playsinline style="width:100%;height:100%;object-fit:cover"></video>${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
-            fillGenToastCard(idx, html, () => refreshLibraryScrollPreserved(libWid));
+            fillGenToastCard(idx, html, () => refreshLibraryFromDB());
           }
         }
+        await refreshLibraryFromDB();
       } else {
         showToast('Video generation failed', 'error');
         cleanupGenToast();
@@ -3632,8 +3683,42 @@ async function bbSend() {
 function cleanupGenToast() {
   const p = document.getElementById('gen-toast-panel');
   if (p) p.remove();
-  document.querySelector('.bb-inner')?.classList.remove('is-generating');
-  _isGenerating = false;
+  if (!_genQueue.length) {
+    document.querySelector('.bb-inner')?.classList.remove('is-generating');
+  }
+}
+
+function updateQueueBadge() {
+  const badge = document.getElementById('bb-queue-badge');
+  if (!badge) return;
+  if (_genQueue.length) {
+    badge.textContent = '+' + _genQueue.length;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function processNext() {
+  if (!_genQueue.length) {
+    _isProcessingQueue = false;
+    updateQueueBadge();
+    if (!document.querySelector('.gen-toast-panel')) {
+      document.querySelector('.bb-inner')?.classList.remove('is-generating');
+    }
+    return;
+  }
+  _isProcessingQueue = true;
+  document.querySelector('.bb-inner')?.classList.add('is-generating');
+  updateQueueBadge();
+  const job = _genQueue.shift();
+  updateQueueBadge();
+  try {
+    await runJob(job);
+  } catch (e) {
+    showToast('Job failed: ' + e.message, 'error');
+  }
+  processNext();
 }
 
 // ============================================================
