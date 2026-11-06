@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shutil
 import uuid
 from datetime import datetime
 import sqlite3
@@ -34,7 +36,9 @@ def _db_row_to_asset(r: sqlite3.Row) -> dict:
         "derived_from": [],
         "metadata": meta,
         "children": [],
-        "favorite": bool(r["favorite"])
+        "favorite": bool(r["favorite"]),
+        "character": bool(r["character"]),
+        "voice": bool(r["voice"])
     }
 
 
@@ -44,8 +48,8 @@ def _upsert_db(asset: dict) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO generations
            (id, type, prompt, filename, width, height, aspect_ratio, duration,
-            parent_id, favorite, metadata, created, last_updated)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            parent_id, favorite, character, voice, metadata, created, last_updated)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             asset["id"],
             asset.get("type", "image"),
@@ -57,6 +61,8 @@ def _upsert_db(asset: dict) -> None:
             asset.get("metadata", {}).get("duration"),
             asset.get("parent_id"),
             1 if asset.get("favorite") else 0,
+            1 if asset.get("character") else 0,
+            1 if asset.get("voice") else 0,
             json.dumps({k: v for k, v in asset.get("metadata", {}).items() if k != "duration"}),
             asset.get("created", datetime.now().isoformat()),
             datetime.now().isoformat()
@@ -85,7 +91,9 @@ def save_generation(
     parent_id: str = None,
     derived_from: list = None,
     metadata: dict = None,
-    favorite: bool = False
+    favorite: bool = False,
+    character: bool = False,
+    voice: bool = False
 ) -> str:
     """Persist a new generation asset to the database and generate its thumbnail."""
     if derived_from is None:
@@ -107,7 +115,9 @@ def save_generation(
         "derived_from": derived_from,
         "metadata": metadata,
         "children": [],
-        "favorite": favorite
+        "favorite": favorite,
+        "character": character,
+        "voice": voice
     }
 
     if duration is not None:
@@ -136,11 +146,13 @@ def update_generation(asset_id: str, updates: dict) -> bool:
         "aspect_ratio": "aspect_ratio",
         "parent_id": "parent_id",
         "favorite": "favorite",
+        "character": "character",
+        "voice": "voice",
     }
     for key, col in field_map.items():
         if key in updates:
             val = updates[key]
-            if key == "favorite":
+            if key in ("favorite", "character", "voice"):
                 val = 1 if val else 0
             fields.append(f"{col} = ?")
             values.append(val)
@@ -209,6 +221,13 @@ def delete_generation(asset_id: str, cascade: bool = False) -> dict:
                 os.remove(tpath)
         except Exception as ex:
             print(f"Warning: could not remove thumbnail {tpath}: {ex}")
+        # Remove cached frame thumbnails (Single Frame app)
+        try:
+            fdir = os.path.join("thumbnails", "frames", gid)
+            if os.path.isdir(fdir):
+                shutil.rmtree(fdir, ignore_errors=True)
+        except Exception as ex:
+            print(f"Warning: could not remove frame cache {gid}: {ex}")
         conn.execute("DELETE FROM generations WHERE id = ?", (gid,))
 
     conn.commit()
@@ -234,7 +253,7 @@ def load_generations() -> list[dict]:
     conn = get_db()
     rows = conn.execute(
         "SELECT id, type, prompt, filename, width, height, aspect_ratio, duration, "
-        "parent_id, favorite, metadata, created, last_updated FROM generations ORDER BY created DESC"
+        "parent_id, favorite, character, voice, metadata, created, last_updated FROM generations ORDER BY created DESC"
     ).fetchall()
     conn.close()
 
@@ -251,3 +270,118 @@ def load_generations() -> list[dict]:
         a["children"] = by_parent.get(a["id"], [])
 
     return result
+
+
+def reapply_segment_export_names(project_id: str) -> dict | None:
+    """Re-apply model-aware export names to a project's segment generations."""
+    from services.music_video_service import (
+        get_project,
+        project_model_key,
+        offset_frames_for_model,
+        segment_export_name,
+    )
+
+    project = get_project(project_id)
+    if project is None:
+        return None
+
+    model_key = project_model_key(project)
+    offset = offset_frames_for_model(model_key)
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, metadata, created FROM generations WHERE metadata LIKE '%\"music\"%'"
+    ).fetchall()
+    conn.close()
+
+    updated = 0
+    total = 0
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except Exception:
+            continue
+        music = meta.get("music") or {}
+        if music.get("project_id") != project_id:
+            continue
+        total += 1
+
+        start = float(music.get("start_time") or 0)
+        character = (music.get("character") or "").strip()
+
+        stamp = None
+        old_name = meta.get("name") or ""
+        last = old_name.rsplit(" - ", 1)[-1] if old_name else ""
+        if re.match(r"^\d{8}-\d{6}$", last):
+            stamp = last
+        if not stamp:
+            try:
+                stamp = datetime.fromisoformat(str(row["created"])).strftime("%Y%m%d-%H%M%S")
+            except Exception:
+                stamp = None
+        if not stamp:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+        new_name = segment_export_name(
+            project.get("title") or "Untitled Music Video",
+            start,
+            character,
+            offset_frames=offset,
+            timestamp=stamp,
+        )
+        if new_name != meta.get("name"):
+            meta["name"] = new_name
+            meta.setdefault("music", {})["model"] = model_key
+            meta["music"]["offset_frames"] = offset
+            update_generation(row["id"], {"metadata": meta})
+            updated += 1
+
+    return {"updated": updated, "total": total}
+
+
+def backfill_segment_export_names() -> dict:
+    """Rewrite music-segment render names with the 24fps timecode start label."""
+    from services.music_video_service import format_segment_timecode
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, metadata, created FROM generations WHERE metadata LIKE '%\"music\"%'"
+    ).fetchall()
+    conn.close()
+
+    updated = 0
+    skipped = 0
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except Exception:
+            skipped += 1
+            continue
+        music = meta.get("music") or {}
+        if "start_time" not in music:
+            skipped += 1
+            continue
+
+        old_name = meta.get("name") or ""
+        parts = old_name.rsplit(" - ", 3)
+        if len(parts) == 4:
+            title, _old_start, character, timestamp = parts
+        else:
+            title = old_name.split(" - ")[0] if old_name else "Untitled Music Video"
+            character = (music.get("character") or "Character").strip() or "Character"
+            try:
+                timestamp = datetime.fromisoformat(row["created"]).strftime("%Y%m%d-%H%M%S")
+            except Exception:
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+        start_label = format_segment_timecode(music.get("start_time") or 0)
+        new_name = " - ".join([title, start_label, character, timestamp])
+        if new_name == old_name:
+            continue
+
+        meta["name"] = new_name
+        meta.pop("duration", None)
+        update_generation(row["id"], {"metadata": meta})
+        updated += 1
+
+    return {"updated": updated, "skipped": skipped, "total": len(rows)}

@@ -5,13 +5,28 @@ def _get_defaults() -> dict:
     return {
         "image_model": "schnell",
         "i2i_model": "klein",
+        "video_model": "ltx",
+        "ltx_version": "2.3",
+        "fasth3_mode": "reference",
+        "segment_timecode_offsets": {"ltx23": 2, "ltx25": 0, "fasth3": 0},
+        "video_upscale": "off",
+        "relayvsr_detail": 1.0,
+        "relayvsr_timeout_seconds": 1800,
+        "relayvsr_model": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+        "relayvsr_vae": "relayvsr_flash_vae_x2_fp32.safetensors",
         "library_video_playback": "1st_frame",
         "qwen_turbo": True,
         "comfyui_url": "http://127.0.0.1:8188",
         "ollama_url": "http://127.0.0.1:11434",
         "ollama_model": "qwen3:8b",
         "ollama_timeout": 180,
+        "xai_api_key": "",
         "failed_gen_clear_seconds": 600,
+        "tts_engine": "qwen3",
+        "tts_qwen3_model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "tts_qwen3_download_source": "HuggingFace",
+        "tts_qwen3_precision": "bf16",
+        "tts_qwen3_attn_mode": "sdpa",
         "library_density": "full",
         "library_filters": ["image"],
         "window_states": {},
@@ -48,9 +63,44 @@ def _apply_defaults(s: dict) -> dict:
     for key, default_val in defaults.items():
         if key not in s or s[key] is None:
             s[key] = default_val
-        elif key == "image_model" and s[key] not in ("schnell", "klein", "qwen"):
+        elif key == "image_model" and s[key] not in ("schnell", "klein", "qwen", "grok", "grok-quality"):
             s[key] = default_val
-        elif key == "i2i_model" and s[key] not in ("klein", "flux2"):
+        elif key == "i2i_model" and s[key] not in ("klein", "flux2", "grok", "grok-quality"):
+            s[key] = default_val
+        elif key == "ltx_version":
+            val = str(s.get(key) if s.get(key) is not None else "").strip()
+            s[key] = val if val in ("2.3", "2.5") else default_val
+        elif key == "video_model" and s[key] not in ("ltx", "fasth3", "grok"):
+            s[key] = default_val
+        elif key == "fasth3_mode" and s[key] not in ("reference", "i2v"):
+            s[key] = default_val
+        elif key == "segment_timecode_offsets":
+            if not isinstance(s[key], dict):
+                s[key] = dict(default_val)
+            else:
+                clean = {}
+                for model, fallback in default_val.items():
+                    try:
+                        clean[model] = int(s[key][model])
+                    except (KeyError, TypeError, ValueError):
+                        clean[model] = fallback
+                s[key] = clean
+        elif key == "xai_api_key" and not isinstance(s[key], str):
+            s[key] = default_val
+        elif key == "video_upscale" and s[key] not in ("off", "relayvsr_x2"):
+            s[key] = default_val
+        elif key == "relayvsr_detail":
+            try:
+                s[key] = max(0.0, min(1.0, float(s[key])))
+            except (TypeError, ValueError):
+                s[key] = default_val
+        elif key == "relayvsr_timeout_seconds":
+            try:
+                val = int(s[key])
+                s[key] = val if val > 0 else default_val
+            except (TypeError, ValueError):
+                s[key] = default_val
+        elif key in ("relayvsr_model", "relayvsr_vae") and (not isinstance(s[key], str) or not s[key].strip()):
             s[key] = default_val
         elif key == "library_video_playback" and s[key] not in ("1st_frame", "play_loop"):
             s[key] = default_val
@@ -59,6 +109,16 @@ def _apply_defaults(s: dict) -> dict:
         elif key in ("comfyui_url", "ollama_url", "ollama_model") and (not isinstance(s[key], str) or not s[key].strip()):
             s[key] = default_val
         elif key in ("ollama_timeout", "failed_gen_clear_seconds") and (not isinstance(s[key], (int, float)) or s[key] <= 0):
+            s[key] = default_val
+        elif key == "tts_engine" and s[key] not in ("qwen3", "chatterbox", "cosyvoice3", "indextts25", "f5tts", "xttsv2", "zonos2", "gpt_sovits"):
+            s[key] = default_val
+        elif key == "tts_qwen3_model" and (not isinstance(s[key], str) or not s[key].strip()):
+            s[key] = default_val
+        elif key == "tts_qwen3_download_source" and s[key] not in ("HuggingFace", "ModelScope"):
+            s[key] = default_val
+        elif key == "tts_qwen3_precision" and s[key] not in ("bf16", "fp16", "fp32"):
+            s[key] = default_val
+        elif key == "tts_qwen3_attn_mode" and s[key] not in ("sdpa", "flash_attention_2", "sage_attention", "eager"):
             s[key] = default_val
         elif key == "library_density" and s[key] not in ("full", "compact"):
             s[key] = default_val
@@ -117,6 +177,26 @@ def get_ollama_settings() -> dict:
     if timeout <= 0:
         timeout = 180
     return {"url": url.rstrip("/"), "model": model, "timeout": timeout}
+
+def ensure_settings_in_db() -> None:
+    """Insert any missing default settings keys into SQLite so Admin Settings Editor shows them."""
+    try:
+        from services.database_service import get_db
+        defaults = _get_defaults()
+        conn = get_db()
+        for key, value in defaults.items():
+            row = conn.execute("SELECT key FROM settings WHERE key = ?", (key,)).fetchone()
+            if not row:
+                val_str = json.dumps(value) if not isinstance(value, str) else value
+                conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                    (key, val_str),
+                )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[config] ensure_settings_in_db: {e}")
+
 
 def get_failed_gen_clear_seconds() -> int:
     """Return the configured timeout (in seconds) before a generation is considered failed.

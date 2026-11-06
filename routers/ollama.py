@@ -2,11 +2,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from config import get_ollama_settings
 from services.ollama_service import (
-    ollama_chat,
+    ollama_generate,
     check_ollama_connection,
     fetch_ollama_models,
 )
-from services.story_service import ollama_generate   # used by enhance
 
 router = APIRouter()
 
@@ -70,50 +69,4 @@ async def ollama_enhance_prompt(request: Request):
         import traceback
         traceback.print_exc()
         return {"enhanced": original, "error": str(e)}
-
-@router.post("/chat")
-async def chat_send(request: Request):
-    """
-    Simple chat endpoint for the new Chat mode.
-    Accepts {prompt, history?, attachment?} where attachment = {name, content}.
-    Builds a messages list (system + optional doc context + history + user) and
-    calls the live Ollama settings via /api/chat.
-    """
-    try:
-        data = await request.json()
-        prompt = (data.get("prompt") or "").strip()
-        history = data.get("history") or []
-        attachment = data.get("attachment") or None
-
-        if not prompt:
-            return JSONResponse({"success": False, "error": "prompt required"}, status_code=400)
-
-        messages = []
-
-        sys = "You are a helpful AI assistant."
-        if attachment and attachment.get("content"):
-            doc_name = attachment.get("name", "document")
-            doc_text = str(attachment.get("content", ""))[:12000]
-            sys += f"\n\nThe user attached a document named \"{doc_name}\". Use its content to answer:\n{doc_text}"
-
-        messages.append({"role": "system", "content": sys})
-
-        for h in history:
-            if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
-                messages.append({"role": h["role"], "content": h["content"]})
-
-        messages.append({"role": "user", "content": prompt})
-
-        res = await ollama_chat(messages)
-        text = res.get("text", "")
-        err = res.get("error")
-
-        if err:
-            return JSONResponse({"success": False, "error": err})
-
-        return {"success": True, "response": text}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 

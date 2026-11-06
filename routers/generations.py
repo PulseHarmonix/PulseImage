@@ -14,12 +14,20 @@ from services.comfy_service import (
     generate_multiple_images,
     generate_image_audio_to_videos_with_progress,
     generate_double_image_to_image_with_progress,
+    generate_fasth3_multi_ref_video,
+    generate_fasth3_multi_ref_videos_with_progress,
+    resolve_video_model,
 )
 from services.generation_service import (
     save_generation,
     update_generation,
     delete_generation,
     load_generations
+)
+from services.comfy_progress import set_progress_job
+from services.video_upscale_service import (
+    maybe_upscale_video_result,
+    upscale_existing_asset,
 )
 
 router = APIRouter()
@@ -38,31 +46,90 @@ async def generate(data: dict):
     modifier_image = data.get("modifier_image")
     image_model = data.get("image_model", "schnell")
     i2i_model = data.get("i2i_model", "klein")
+    video_model = data.get("video_model")  # "ltx" | "fasth3" | "grok"; None → settings
+    ltx_version = data.get("ltx_version")  # "2.3" | "2.5"; None → settings
+    ref_images = (data.get("ref_images") or [])[:6]
+    ref_audios = (data.get("ref_audios") or [])[:3]
     qwen_turbo = data.get("qwen_turbo", True)
     lora_name = data.get("lora_name")
+    job_id = data.get("job_id") or ""
+    disable_prompt_enhance = bool(data.get("disable_prompt_enhance"))
+    fasth3_mode = data.get("fasth3_mode") or "reference"
+    video_upscale = data.get("video_upscale")
+    upscale_detail = data.get("upscale_detail")
 
     if mode == "video" and duration:
+        if resolve_video_model(video_model) == "fasth3":
+            # Image-only: optionally use the first-frame I2V workflow.
+            if fasth3_mode == "i2v" and source_image and not modifier_audio:
+                set_progress_job(job_id, 0)
+                result = await generate_single_image_to_video(
+                    source_image, prompt, resolution, aspect_ratio, duration,
+                    video_model=video_model, ltx_version=ltx_version,
+                )
+                result = await maybe_upscale_video_result(
+                    result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+                )
+                return {"success": True, "results": [result]}
+            # Reference workflows: 1 image (no audio), 2+ images, or multiple audios.
+            if (ref_images or len(ref_audios) > 1) and not (len(ref_images) == 1 and len(ref_audios) == 1):
+                set_progress_job(job_id, 0)
+                result = await generate_fasth3_multi_ref_video(
+                    ref_images, ref_audios, prompt, resolution, aspect_ratio, duration
+                )
+                result = await maybe_upscale_video_result(
+                    result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+                )
+                return {"success": True, "results": [result]}
         if modifier_audio and source_image:
-            result = await generate_single_image_audio_to_video(source_image, modifier_audio, prompt, resolution, aspect_ratio, duration)
+            # IA2V is LTX-only (Grok has no image+audio→video)
+            set_progress_job(job_id, 0)
+            result = await generate_single_image_audio_to_video(
+                source_image, modifier_audio, prompt, resolution, aspect_ratio, duration,
+                ltx_version=ltx_version, video_model=video_model,
+            )
+            result = await maybe_upscale_video_result(
+                result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+            )
             return {"success": True, "results": [result]}
         elif source_image:
-            result = await generate_single_image_to_video(source_image, prompt, resolution, aspect_ratio, duration)
+            set_progress_job(job_id, 0)
+            result = await generate_single_image_to_video(
+                source_image, prompt, resolution, aspect_ratio, duration,
+                video_model=video_model, ltx_version=ltx_version,
+            )
+            result = await maybe_upscale_video_result(
+                result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+            )
             return {"success": True, "results": [result]}
         else:
-            result = await generate_single_video(prompt, resolution, aspect_ratio, duration)
+            set_progress_job(job_id, 0)
+            result = await generate_single_video(
+                prompt, resolution, aspect_ratio, duration,
+                video_model=video_model, ltx_version=ltx_version,
+                disable_prompt_enhance=disable_prompt_enhance,
+            )
+            result = await maybe_upscale_video_result(
+                result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+            )
             return {"success": True, "results": [result]}
     else:
         if source_image and modifier_image:
             # double i2i (2 images)
-            result = await generate_double_image_to_image(source_image, modifier_image, prompt)
+            set_progress_job(job_id, 0)
+            result = await generate_double_image_to_image(
+                source_image, modifier_image, prompt, i2i_model=i2i_model
+            )
             return {"success": True, "results": [result]}
         elif source_image:
             # i2i
+            set_progress_job(job_id, 0)
             result = await generate_single_image_to_image(source_image, prompt, i2i_model=i2i_model)
             return {"success": True, "results": [result]}
         else:
             # Image generation (default)
             lora_strength = float(data.get("lora_strength", 0.6)) if data.get("lora_strength") is not None else 0.6
+            set_progress_job(job_id, 0)
             results = await generate_multiple_images(prompt, resolution, aspect_ratio, count=count, image_model=image_model, qwen_turbo=qwen_turbo, lora_name=lora_name, lora_strength=lora_strength)
             return {"success": True, "results": results}
 
@@ -80,9 +147,18 @@ async def generate_stream(data: dict):
     modifier_image = data.get("modifier_image")  # image modifier for double i2i (2 refs)
     image_model = data.get("image_model", "schnell")  # for main page text-to-image model choice
     i2i_model = data.get("i2i_model", "klein")  # for modal image-to-image edits
+    video_model = data.get("video_model")  # "ltx" | "fasth3" | "grok"
+    ltx_version = data.get("ltx_version")  # "2.3" | "2.5"
+    ref_images = (data.get("ref_images") or [])[:6]
+    ref_audios = (data.get("ref_audios") or [])[:3]
     qwen_turbo = data.get("qwen_turbo", True)
     lora_name = data.get("lora_name")
     lora_strength = float(data.get("lora_strength", 0.6)) if data.get("lora_strength") is not None else 0.6
+    job_id = data.get("job_id") or ""
+    disable_prompt_enhance = bool(data.get("disable_prompt_enhance"))
+    fasth3_mode = data.get("fasth3_mode") or "reference"
+    video_upscale = data.get("video_upscale")
+    upscale_detail = data.get("upscale_detail")
 
     if not prompt:
         return JSONResponse({"success": False, "error": "Prompt required"}, status_code=400)
@@ -92,36 +168,59 @@ async def generate_stream(data: dict):
         count = 1 if is_video else 4
 
     if is_video:
+        if resolve_video_model(video_model) == "fasth3":
+            if fasth3_mode == "i2v" and source_image and not modifier_audio:
+                return StreamingResponse(
+                    generate_image_to_videos_with_progress(
+                        source_image, prompt, resolution, aspect_ratio, duration,
+                        count=count, video_model=video_model, ltx_version=ltx_version, job_id=job_id,
+                        video_upscale=video_upscale, upscale_detail=upscale_detail,
+                    ),
+                    media_type="text/event-stream"
+                )
+            if (ref_images or len(ref_audios) > 1) and not (len(ref_images) == 1 and len(ref_audios) == 1):
+                return StreamingResponse(
+                    generate_fasth3_multi_ref_videos_with_progress(
+                        ref_images, ref_audios, prompt, resolution, aspect_ratio, duration, count=count, job_id=job_id,
+                        video_upscale=video_upscale, upscale_detail=upscale_detail,
+                    ),
+                    media_type="text/event-stream"
+                )
         if modifier_audio and source_image:
-            # New: Image + Audio modifier to Video (ltx2_3_image_audio_to_video.json)
-            # Triggered when + in modal picked an audio + video mode (or Create Video + audio mod)
+            # IA2V is LTX-only
             return StreamingResponse(
                 generate_image_audio_to_videos_with_progress(
-                    source_image, modifier_audio, prompt, resolution, aspect_ratio, duration, count=count
+                    source_image, modifier_audio, prompt, resolution, aspect_ratio, duration,
+                    count=count, ltx_version=ltx_version, video_model=video_model, job_id=job_id,
+                    video_upscale=video_upscale, upscale_detail=upscale_detail,
                 ),
                 media_type="text/event-stream"
             )
         elif source_image:
-            # Image-to-Video path (triggered from modal "Create Video From this")
             return StreamingResponse(
                 generate_image_to_videos_with_progress(
-                    source_image, prompt, resolution, aspect_ratio, duration, count=count
+                    source_image, prompt, resolution, aspect_ratio, duration,
+                    count=count, video_model=video_model, ltx_version=ltx_version, job_id=job_id,
+                    video_upscale=video_upscale, upscale_detail=upscale_detail,
                 ),
                 media_type="text/event-stream"
             )
         else:
-            # Regular text-to-video
             return StreamingResponse(
-                generate_videos_with_progress(prompt, resolution, aspect_ratio, duration, count=count),
+                generate_videos_with_progress(
+                    prompt, resolution, aspect_ratio, duration,
+                    count=count, video_model=video_model, ltx_version=ltx_version, job_id=job_id,
+                    disable_prompt_enhance=disable_prompt_enhance,
+                    video_upscale=video_upscale, upscale_detail=upscale_detail,
+                ),
                 media_type="text/event-stream"
             )
     else:
         if source_image and modifier_image:
-            # Double image-to-image (2 reference images + prompt) using the new flux2_klein_image_image_to_image workflow.
-            # 1st ref = main image (opened in modal), 2nd ref = modifier image (selected via + in modal), when in image mode.
+            # Double image-to-image (2 reference images + prompt) — Comfy Klein or Grok multi-ref edit
             return StreamingResponse(
                 generate_double_image_to_image_with_progress(
-                    source_image, modifier_image, prompt, count=count
+                    source_image, modifier_image, prompt, count=count, i2i_model=i2i_model, job_id=job_id
                 ),
                 media_type="text/event-stream"
             )
@@ -129,15 +228,34 @@ async def generate_stream(data: dict):
             # Image-to-Image path (adjustment prompt from modal) - single ref + prompt, using selected i2i model
             return StreamingResponse(
                 generate_image_to_images_with_progress(
-                    source_image, prompt, count=count, i2i_model=i2i_model
+                    source_image, prompt, count=count, i2i_model=i2i_model, job_id=job_id
                 ),
                 media_type="text/event-stream"
             )
         else:
             return StreamingResponse(
-                generate_images_with_progress(prompt, resolution, aspect_ratio, count=count, image_model=image_model, qwen_turbo=qwen_turbo, lora_name=lora_name, lora_strength=lora_strength),
+                generate_images_with_progress(prompt, resolution, aspect_ratio, count=count, image_model=image_model, qwen_turbo=qwen_turbo, lora_name=lora_name, lora_strength=lora_strength, job_id=job_id),
                 media_type="text/event-stream"
             )
+
+@router.post("/upscale-video")
+async def upscale_video(data: dict):
+    """Upscale an existing video asset into a new derived asset via RelayVSR X2."""
+    asset_id = (data or {}).get("asset_id")
+    if not asset_id:
+        return {"success": False, "error": "asset_id is required"}
+
+    job_id = (data or {}).get("job_id") or ""
+    detail = (data or {}).get("detail")
+
+    result = await upscale_existing_asset(asset_id, job_id=job_id, detail=detail)
+    return {
+        "success": bool(result.get("success")),
+        "result": result.get("result"),
+        "asset": result.get("asset"),
+        "error": result.get("error"),
+    }
+
 
 @router.post("/save-generation")
 async def save_generation_endpoint(request: Request):
@@ -171,7 +289,9 @@ async def save_generation_endpoint(request: Request):
             parent_id=data.get("parent_id"),
             derived_from=data.get("derived_from", []),
             metadata=data.get("metadata", {}),
-            favorite=data.get("favorite", False)
+            favorite=data.get("favorite", False),
+            character=data.get("character", False),
+            voice=data.get("voice", False)
         )
         return {"success": True, "id": asset_id}
 
@@ -191,6 +311,10 @@ async def update_generation_endpoint(request: Request):
         updates = {}
         if "favorite" in data:
             updates["favorite"] = bool(data.get("favorite"))
+        if "character" in data:
+            updates["character"] = bool(data.get("character"))
+        if "voice" in data:
+            updates["voice"] = bool(data.get("voice"))
         if not updates:
             return {"success": False, "error": "no valid updates provided"}
         success = update_generation(asset_id, updates)

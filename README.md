@@ -47,6 +47,16 @@ Video Models (LTX 2.3 family):
 - ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors             (loras)
 - ltx-2.3-spatial-upscaler-x2-1.1.safetensors                                            (latent_upscale_models)
 
+Video Post-Upscaling (optional RelayVSR X2):
+- relayvsr_x2_lightx2v_int8_convrot.safetensors                                          (diffusion_models)
+- relayvsr_flash_vae_x2_fp32.safetensors                                                 (vae)
+
+RelayVSR X2 is an optional 2x post-upscale pass for generated videos. It uses the
+ComfyUI `RelayVSRConditioning`, `VSRDecode` and `LoadVideo`/`CreateVideo` nodes,
+preserves the source audio and frame rate, and runs after normal generation. Enable
+it in Settings (`video_upscale = relayvsr_x2`) or per request; when the nodes or
+weights are missing the original video is always returned unchanged.
+
 Supporting Models (VAE, CLIP, Text Encoders, Loras):
 - ae.safetensors                                                                         (vae)
 - clip_l.safetensors                                                                     (vae)
@@ -96,6 +106,19 @@ Supporting Models (VAE, CLIP, Text Encoders, Loras):
 2. Configure ComfyUI URL (usually http://127.0.0.1:8188) and Ollama URL (usually http://127.0.0.1:11434)
 3. Click "Check Models" to verify your ComfyUI installation
 4. Save settings
+
+### Grok Imagine (optional cloud image gen/edit)
+
+1. Get an API key from https://console.x.ai
+2. Open **Admin → Settings Editor**
+3. Set **`xai_api_key`** to your key and Save All Changes  
+   (empty key also falls back to env `XAI_API_KEY` if set)
+4. **Models → Image Generation** / **Image Edit**: choose **Grok Imagine** or **Grok Imagine Quality**
+5. Generate from the bottom bar as usual (no Comfy required for Grok paths)
+
+Resolution mapping (images): 480p/720p → 1k, 1080p → 2k. LoRA is Comfy-only (not used with Grok).
+
+**Video:** Models → **Video Generation** → **LTX Video** (Comfy) or **Grok Imagine** (cloud T2V / I2V, max 15s). Image+audio→video remains LTX only; with Grok selected, dropping audio shows “Cannot add — incompatible combination”.
 
 ---
 

@@ -4,6 +4,9 @@ import os
 import uuid
 import json
 import asyncio
+import time
+
+from services.comfy_progress import post_prompt, set_progress_job
 
 from typing import Optional, AsyncGenerator
 
@@ -36,7 +39,21 @@ from utils.video_workflow_utils import (
     load_base_image_to_video_workflow,
     modify_image_to_video_workflow,
     load_base_image_audio_to_video_workflow,
-    modify_image_audio_to_video_workflow
+    modify_image_audio_to_video_workflow,
+    load_base_ltx25_text_to_video_workflow,
+    modify_ltx25_text_to_video_workflow,
+    load_base_ltx25_image_to_video_workflow,
+    modify_ltx25_image_to_video_workflow,
+    load_base_ltx25_image_audio_to_video_workflow,
+    modify_ltx25_image_audio_to_video_workflow,
+    load_base_fasth3_text_to_video_workflow,
+    modify_fasth3_text_to_video_workflow,
+    load_base_fasth3_image_to_video_workflow,
+    modify_fasth3_image_to_video_workflow,
+    load_base_fasth3_reference_image_audio_to_video_workflow,
+    modify_fasth3_reference_image_audio_to_video_workflow,
+    load_base_fasth3_multi_ref_workflow,
+    modify_fasth3_multi_ref_workflow,
 )
 
 IMAGES_FOLDER = "images"
@@ -63,6 +80,37 @@ async def check_comfyui_connection() -> bool:
             return response.status_code == 200
     except Exception:
         return False
+
+
+COMFY_QUEUE_SETTLE_SECONDS = 3.0
+
+
+async def wait_for_comfy_queue_idle(
+    settle_seconds: float = COMFY_QUEUE_SETTLE_SECONDS,
+    max_wait_seconds: float = 180.0,
+) -> None:
+    """Wait until ComfyUI has no running/pending jobs, then settle briefly.
+
+    Prevents firing the next prompt while the previous render is still
+    finalizing, which can leave the queue wedged.
+    """
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            while time.monotonic() - start < max_wait_seconds:
+                try:
+                    q = (await client.get(f"{get_comfyui_url()}/queue")).json()
+                except Exception:
+                    break  # ComfyUI unreachable; let the caller report it
+                running = q.get("queue_running") or []
+                pending = q.get("queue_pending") or []
+                if not running and not pending:
+                    break
+                await asyncio.sleep(1.0)
+    except Exception:
+        pass
+    if settle_seconds > 0:
+        await asyncio.sleep(settle_seconds)
 
 
 async def fetch_loras_from_comfy() -> list[str]:
@@ -344,6 +392,12 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
     print(">>> generate_single_image started")
 
     try:
+        from services.grok_imagine_service import is_grok_model, generate_single_image as grok_t2i
+        if is_grok_model(image_model):
+            if lora_name:
+                print("[T2I] LoRA ignored for Grok Imagine models")
+            return await grok_t2i(prompt, resolution, aspect_ratio, image_model=image_model)
+
         width, height = get_image_dimensions(resolution, aspect_ratio)
         if lora_name:
             print(f">>> workflow: LoRA ({lora_name.split('.')[0]})")
@@ -364,7 +418,7 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
 
         async with httpx.AsyncClient(timeout=180.0) as client:
             # Queue the prompt
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_data = res.json()
             prompt_id = prompt_data.get("prompt_id")
             print(f"Prompt queued. ID: {prompt_id}")
@@ -444,13 +498,42 @@ async def generate_multiple_images(prompt: str, resolution: str, aspect_ratio: s
     return results
 
 
-async def generate_images_with_progress(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.6) -> AsyncGenerator[str, None]:
+async def generate_images_with_progress(prompt: str, resolution: str, aspect_ratio: str, count: int = 4, image_model: str = "schnell", qwen_turbo: bool = True, lora_name: Optional[str] = None, lora_strength: float = 0.6, job_id: str = "") -> AsyncGenerator[str, None]:
     """Generate multiple images as an async generator, yielding SSE progress events for each"""
+    from services.grok_imagine_service import is_grok_model, generate_images as grok_generate_images
+
+    # Grok: batch n images in one API call, still emit per-index SSE events
+    if is_grok_model(image_model):
+        for i in range(count):
+            yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 20})}\n\n"
+        if lora_name:
+            print("[T2I] LoRA ignored for Grok Imagine models")
+        task = asyncio.create_task(
+            grok_generate_images(prompt, resolution, aspect_ratio, count=count, image_model=image_model)
+        )
+        progress_steps = [40, 60, 80]
+        for percent in progress_steps:
+            if task.done():
+                break
+            for i in range(count):
+                yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': percent})}\n\n"
+            await asyncio.sleep(0.6)
+        results = await task
+        for i, result in enumerate(results):
+            yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 100})}\n\n"
+            if result.get("success"):
+                yield f"data: {json.dumps({'type': 'image_ready', 'index': i, 'local_filename': result['local_filename'], 'width': result.get('width', 0), 'height': result.get('height', 0)})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'index': i, 'error': result.get('error', 'Unknown error')})}\n\n"
+        return
+
     for i in range(count):
         # Tell frontend this card has started
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
         # Generate the image in the background
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
             generate_single_image(prompt, resolution, aspect_ratio, image_model=image_model, qwen_turbo=qwen_turbo, lora_name=lora_name, lora_strength=lora_strength)
         )
@@ -593,7 +676,7 @@ async def upload_audio_to_comfy(local_filename: str) -> str | None:
                 if response.status_code == 200:
                     data = response.json()
                     comfy_name = data.get("name")
-                    print(f"[IA2V] ✅ Uploaded audio as Comfy input: {comfy_name}")
+                    print(f"[IA2V] Uploaded audio as Comfy input: {comfy_name}")
                     return comfy_name
                 else:
                     print(f"[IA2V] Audio upload failed {response.status_code}: {response.text}")
@@ -604,17 +687,68 @@ async def upload_audio_to_comfy(local_filename: str) -> str | None:
         return None
 
 
-async def generate_single_video(prompt: str, resolution: str, aspect_ratio: str, duration: int) -> dict:
+def resolve_ltx_version(ltx_version: str | None = None) -> str:
+    """Return the LTX version to use ('2.3' or '2.5'), falling back to settings."""
+    v = ltx_version
+    if v not in ("2.3", "2.5"):
+        try:
+            from config import load_app_settings
+            v = str(load_app_settings().get("ltx_version", "2.3"))
+        except Exception:
+            v = "2.3"
+    return v if v in ("2.3", "2.5") else "2.3"
+
+
+def resolve_video_model(video_model: str | None = None) -> str:
+    """Return the video family to use ('ltx', 'fasth3', 'grok'), falling back to settings."""
+    m = video_model
+    if m not in ("ltx", "fasth3", "grok"):
+        try:
+            from config import load_app_settings
+            m = str(load_app_settings().get("video_model", "ltx"))
+        except Exception:
+            m = "ltx"
+    return m if m in ("ltx", "fasth3", "grok") else "ltx"
+
+
+async def generate_single_video(
+    prompt: str,
+    resolution: str,
+    aspect_ratio: str,
+    duration: int,
+    video_model: str = None,
+    ltx_version: str = None,
+    disable_prompt_enhance: bool = False,
+) -> dict:
     """Generate a single video from a text prompt using the video workflow and download the result"""
     print("\n>>> [VIDEO] generate_single_video started")
 
     try:
-        base_workflow = load_base_video_workflow()
+        from services.grok_imagine_service import generate_video as grok_video
+        model = resolve_video_model(video_model)
+        if model == "grok":
+            return await grok_video(prompt, resolution, aspect_ratio, duration)
+
         width, height = get_video_dimensions(resolution, aspect_ratio)
-        workflow = modify_video_workflow(base_workflow, prompt, width, height, duration)
+        if model == "fasth3":
+            base_workflow = load_base_fasth3_text_to_video_workflow()
+            workflow = modify_fasth3_text_to_video_workflow(base_workflow, prompt, width, height, duration)
+            save_node = "92"
+        else:
+            ltx_ver = resolve_ltx_version(ltx_version)
+            if ltx_ver == "2.5":
+                base_workflow = load_base_ltx25_text_to_video_workflow()
+                workflow = modify_ltx25_text_to_video_workflow(base_workflow, prompt, width, height, duration)
+            else:
+                base_workflow = load_base_video_workflow()
+                workflow = modify_video_workflow(
+                    base_workflow, prompt, width, height, duration,
+                    disable_prompt_enhance=disable_prompt_enhance,
+                )
+            save_node = "75"
 
         async with httpx.AsyncClient(timeout=600.0) as client:
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_id = res.json().get("prompt_id")
 
             if not prompt_id:
@@ -642,16 +776,16 @@ async def generate_single_video(prompt: str, resolution: str, aspect_ratio: str,
                         if attempt % 10 == 0:
                             print(f"[VIDEO] Prompt found in history (attempt {attempt}). Nodes: {list(outputs.keys())}")
 
-                        # Check node 75 (SaveVideo)
-                        if '75' in outputs:
-                            node75 = outputs['75']
+                        # Check the SaveVideo node for this workflow family
+                        if save_node in outputs:
+                            save_out = outputs[save_node]
 
                             # The video is returned under 'images' key with .mp4 extension
-                            if isinstance(node75, dict) and node75.get('images'):
-                                for item in node75['images']:
+                            if isinstance(save_out, dict) and save_out.get('images'):
+                                for item in save_out['images']:
                                     if isinstance(item, dict) and item.get('filename', '').endswith('.mp4'):
                                         video_info = item
-                                        print(f"[VIDEO] ✅ Found video file in node 75: {video_info}")
+                                        print(f"[VIDEO] Found video file in node {save_node}: {video_info}")
                                         break
 
                             if video_info:
@@ -695,10 +829,12 @@ async def generate_single_image_to_video(
     prompt: str,
     resolution: str,
     aspect_ratio: str,
-    duration: int
+    duration: int,
+    video_model: str = None,
+    ltx_version: str = None,
 ) -> dict:
     """
-    Generate a video from a source image using the LTX 2.3 image-to-video workflow.
+    Generate a video from a source image using the LTX image-to-video workflow.
     - Uploads the source image to ComfyUI
     - Uses the provided prompt (or original)
     - Applies resolution, duration, random seeds
@@ -706,19 +842,42 @@ async def generate_single_image_to_video(
     print("\n>>> [I2V] generate_single_image_to_video started")
 
     try:
+        from services.grok_imagine_service import generate_video as grok_video
+        model = resolve_video_model(video_model)
+        if model == "grok":
+            return await grok_video(
+                prompt, resolution, aspect_ratio, duration,
+                source_image_filename=source_image_filename,
+            )
+
         # 1. Upload the source image so the workflow's LoadImage can reference it
         comfy_image_name = await upload_image_to_comfy(source_image_filename)
         if not comfy_image_name:
             return {"success": False, "error": "Failed to upload source image"}
 
-        base_workflow = load_base_image_to_video_workflow()
         width, height = get_video_dimensions(resolution, aspect_ratio)
-        workflow = modify_image_to_video_workflow(
-            base_workflow, prompt, width, height, duration, comfy_image_name
-        )
+        if model == "fasth3":
+            base_workflow = load_base_fasth3_image_to_video_workflow()
+            workflow = modify_fasth3_image_to_video_workflow(
+                base_workflow, prompt, width, height, duration, comfy_image_name
+            )
+            save_node = "92"
+        else:
+            ltx_ver = resolve_ltx_version(ltx_version)
+            if ltx_ver == "2.5":
+                base_workflow = load_base_ltx25_image_to_video_workflow()
+                workflow = modify_ltx25_image_to_video_workflow(
+                    base_workflow, prompt, width, height, duration, comfy_image_name
+                )
+            else:
+                base_workflow = load_base_image_to_video_workflow()
+                workflow = modify_image_to_video_workflow(
+                    base_workflow, prompt, width, height, duration, comfy_image_name
+                )
+            save_node = "75"
 
         async with httpx.AsyncClient(timeout=600.0) as client:
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_id = res.json().get("prompt_id")
 
             if not prompt_id:
@@ -746,15 +905,15 @@ async def generate_single_image_to_video(
                         if attempt % 10 == 0:
                             print(f"[I2V] Prompt found in history (attempt {attempt}). Nodes: {list(outputs.keys())}")
 
-                        # Check node 75 (SaveVideo) - same as text-to-video
-                        if '75' in outputs:
-                            node75 = outputs['75']
+                        # Check the SaveVideo node for this workflow family
+                        if save_node in outputs:
+                            save_out = outputs[save_node]
 
-                            if isinstance(node75, dict) and node75.get('images'):
-                                for item in node75['images']:
+                            if isinstance(save_out, dict) and save_out.get('images'):
+                                for item in save_out['images']:
                                     if isinstance(item, dict) and item.get('filename', '').endswith('.mp4'):
                                         video_info = item
-                                        print(f"[I2V] ✅ Found video file in node 75: {video_info}")
+                                        print(f"[I2V] Found video file in node {save_node}: {video_info}")
                                         break
 
                             if video_info:
@@ -799,16 +958,21 @@ async def generate_single_image_audio_to_video(
     prompt: str,
     resolution: str,
     aspect_ratio: str,
-    duration: int
+    duration: int,
+    ltx_version: str = None,
+    video_model: str = None,
 ) -> dict:
     """
-    Generate a video from a source image + audio modifier using the LTX 2.3 image-audio-to-video workflow.
+    Generate a video from a source image + audio using an image-audio-to-video workflow.
     - Uploads the source image and the audio file to ComfyUI
     - Uses the provided prompt (or original)
     - Applies resolution, duration, random seeds
     - Called when audio modifier is selected in modal + video mode
     """
     print("\n>>> [IA2V] generate_single_image_audio_to_video started")
+
+    # Let any previous render finish and ComfyUI settle before touching inputs.
+    await wait_for_comfy_queue_idle()
 
     try:
         # 1. Upload the main source image (the one viewed in modal)
@@ -821,14 +985,30 @@ async def generate_single_image_audio_to_video(
         if not comfy_audio_name:
             return {"success": False, "error": "Failed to upload modifier audio"}
 
-        base_workflow = load_base_image_audio_to_video_workflow()
+        model = resolve_video_model(video_model)
         width, height = get_video_dimensions(resolution, aspect_ratio)
-        workflow = modify_image_audio_to_video_workflow(
-            base_workflow, prompt, width, height, duration, comfy_image_name, comfy_audio_name
-        )
+        if model == "fasth3":
+            base_workflow = load_base_fasth3_reference_image_audio_to_video_workflow()
+            workflow = modify_fasth3_reference_image_audio_to_video_workflow(
+                base_workflow, prompt, width, height, duration, comfy_image_name, comfy_audio_name
+            )
+            save_node = "92"
+        else:
+            ltx_ver = resolve_ltx_version(ltx_version)
+            if ltx_ver == "2.5":
+                base_workflow = load_base_ltx25_image_audio_to_video_workflow()
+                workflow = modify_ltx25_image_audio_to_video_workflow(
+                    base_workflow, prompt, width, height, duration, comfy_image_name, comfy_audio_name
+                )
+            else:
+                base_workflow = load_base_image_audio_to_video_workflow()
+                workflow = modify_image_audio_to_video_workflow(
+                    base_workflow, prompt, width, height, duration, comfy_image_name, comfy_audio_name
+                )
+            save_node = "341"
 
         async with httpx.AsyncClient(timeout=600.0) as client:
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_id = res.json().get("prompt_id")
 
             if not prompt_id:
@@ -856,15 +1036,15 @@ async def generate_single_image_audio_to_video(
                         if attempt % 10 == 0:
                             print(f"[IA2V] Prompt found in history (attempt {attempt}). Nodes: {list(outputs.keys())}")
 
-                        # Check node 341 (SaveVideo for the ia2v workflow)
-                        if '341' in outputs:
-                            node = outputs['341']
+                        # Check the SaveVideo node for this workflow family
+                        if save_node in outputs:
+                            save_out = outputs[save_node]
 
-                            if isinstance(node, dict) and node.get('images'):
-                                for item in node['images']:
+                            if isinstance(save_out, dict) and save_out.get('images'):
+                                for item in save_out['images']:
                                     if isinstance(item, dict) and item.get('filename', '').endswith('.mp4'):
                                         video_info = item
-                                        print(f"[IA2V] ✅ Found video file in node 341: {video_info}")
+                                        print(f"[IA2V] Found video file in node {save_node}: {video_info}")
                                         break
 
                             if video_info:
@@ -903,6 +1083,105 @@ async def generate_single_image_audio_to_video(
         return {"success": False, "error": str(e)}
 
 
+async def generate_fasth3_multi_ref_video(
+    ref_images: list,
+    ref_audios: list,
+    prompt: str,
+    resolution: str,
+    aspect_ratio: str,
+    duration: float,
+) -> dict:
+    """Generate a FastH3 video from multiple reference images and audio clips.
+
+    Uses the dedicated multi-ref workflow so the single-ref OmniRef workflow
+    (used by Music Video) is unaffected.
+    """
+    print("\n>>> [FASTH3 MULTI-REF] generate_fasth3_multi_ref_video started")
+    try:
+        image_names = []
+        for fn in (ref_images or [])[:6]:
+            name = await upload_image_to_comfy(fn)
+            if not name:
+                return {"success": False, "error": f"Failed to upload reference image: {fn}"}
+            image_names.append(name)
+
+        audio_names = []
+        for fn in (ref_audios or [])[:3]:
+            name = await upload_audio_to_comfy(fn)
+            if not name:
+                return {"success": False, "error": f"Failed to upload reference audio: {fn}"}
+            audio_names.append(name)
+
+        if not image_names and not audio_names:
+            return {"success": False, "error": "No references supplied"}
+
+        width, height = get_video_dimensions(resolution, aspect_ratio)
+        base_workflow = load_base_fasth3_multi_ref_workflow()
+        workflow = modify_fasth3_multi_ref_workflow(
+            base_workflow, prompt, width, height, duration, image_names, audio_names
+        )
+        save_node = "92"
+
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            res = await post_prompt(client, workflow)
+            prompt_id = res.json().get("prompt_id")
+            if not prompt_id:
+                return {"success": False, "error": "No prompt_id"}
+
+            print(f"[FASTH3 MULTI-REF] Queued. Prompt ID: {prompt_id}")
+
+            video_info = None
+            try:
+                from main import get_failed_gen_clear_seconds
+                max_attempts = get_failed_gen_clear_seconds()
+            except Exception:
+                max_attempts = 600
+            for attempt in range(max_attempts):
+                await asyncio.sleep(1)
+                try:
+                    history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
+                    if prompt_id in history:
+                        outputs = history[prompt_id].get("outputs", {})
+                        if attempt % 10 == 0:
+                            print(f"[FASTH3 MULTI-REF] Prompt found in history (attempt {attempt}). Nodes: {list(outputs.keys())}")
+                        if save_node in outputs:
+                            save_out = outputs[save_node]
+                            if isinstance(save_out, dict) and save_out.get("images"):
+                                for item in save_out["images"]:
+                                    if isinstance(item, dict) and item.get("filename", "").endswith(".mp4"):
+                                        video_info = item
+                                        print(f"[FASTH3 MULTI-REF] Found video file in node {save_node}: {video_info}")
+                                        break
+                            if video_info:
+                                break
+                except Exception as e:
+                    if attempt % 20 == 0:
+                        print(f"[FASTH3 MULTI-REF] Polling warning: {e}")
+
+            if not video_info:
+                return {"success": False, "error": "No video output found"}
+
+            local_filename = await download_and_save_video(
+                video_info.get("filename"), video_info.get("subfolder", "")
+            )
+            if not local_filename:
+                return {"success": False, "error": "Download failed"}
+
+            return {
+                "success": True,
+                "local_filename": local_filename,
+                "width": width,
+                "height": height,
+                "duration": duration,
+            }
+
+    except Exception as e:
+        print(f"[FASTH3 MULTI-REF] Critical error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
 async def generate_single_image_to_image(
     source_image_filename: str,
     prompt: str,
@@ -918,6 +1197,10 @@ async def generate_single_image_to_image(
     print("\n>>> [I2I] generate_single_image_to_image started (model:", i2i_model, ")")
 
     try:
+        from services.grok_imagine_service import is_grok_model, edit_single_image as grok_edit
+        if is_grok_model(i2i_model):
+            return await grok_edit(source_image_filename, prompt, i2i_model=i2i_model)
+
         # 1. Upload the source image
         comfy_image_name = await upload_image_to_comfy(source_image_filename)
         if not comfy_image_name:
@@ -947,7 +1230,7 @@ async def generate_single_image_to_image(
             )
 
         async with httpx.AsyncClient(timeout=300.0) as client:
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_id = res.json().get("prompt_id")
 
             if not prompt_id:
@@ -1033,12 +1316,14 @@ async def generate_image_to_images_with_progress(
     source_image_filename: str,
     prompt: str,
     count: int = 1,
-    i2i_model: str = "klein"
+    i2i_model: str = "klein",
+    job_id: str = ""
 ) -> AsyncGenerator[str, None]:
     """Progress wrapper for image-to-image generation from modal prompt bar (adjustment prompt)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
             generate_single_image_to_image(source_image_filename, prompt, i2i_model=i2i_model)
         )
@@ -1082,7 +1367,8 @@ async def generate_image_to_images_with_progress(
 async def generate_double_image_to_image(
     main_image_filename: str,
     second_image_filename: str,
-    prompt: str
+    prompt: str,
+    i2i_model: str = None,
 ) -> dict:
     """
     Generate an image from two reference images + prompt using the Flux2 Klein double i2i workflow.
@@ -1093,6 +1379,19 @@ async def generate_double_image_to_image(
     print("\n>>> [DOUBLE_I2I] generate_double_image_to_image started")
 
     try:
+        from services.grok_imagine_service import is_grok_model, edit_double_image as grok_double
+        model = i2i_model
+        if model is None:
+            try:
+                from config import load_app_settings
+                model = load_app_settings().get("i2i_model", "klein")
+            except Exception:
+                model = "klein"
+        if is_grok_model(model):
+            return await grok_double(
+                main_image_filename, second_image_filename, prompt, i2i_model=model
+            )
+
         # 1. Upload the main image (1st reference)
         comfy_main_name = await upload_image_to_comfy(main_image_filename)
         if not comfy_main_name:
@@ -1109,7 +1408,7 @@ async def generate_double_image_to_image(
         )
 
         async with httpx.AsyncClient(timeout=300.0) as client:
-            res = await client.post(f"{get_comfyui_url()}/prompt", json={"prompt": workflow})
+            res = await post_prompt(client, workflow)
             prompt_id = res.json().get("prompt_id")
 
             if not prompt_id:
@@ -1195,14 +1494,19 @@ async def generate_double_image_to_image_with_progress(
     main_image_filename: str,
     second_image_filename: str,
     prompt: str,
-    count: int = 1
+    count: int = 1,
+    i2i_model: str = None,
+    job_id: str = "",
 ) -> AsyncGenerator[str, None]:
     """Progress wrapper for double image-to-image (2 refs + prompt) from modal when modifier image selected in image mode."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
-            generate_double_image_to_image(main_image_filename, second_image_filename, prompt)
+            generate_double_image_to_image(
+                main_image_filename, second_image_filename, prompt, i2i_model=i2i_model
+            )
         )
 
         # Send smooth progress updates
@@ -1241,13 +1545,30 @@ async def generate_double_image_to_image_with_progress(
             })}\n\n"
 
 
-async def generate_videos_with_progress(prompt: str, resolution: str, aspect_ratio: str, duration: int, count: int = 1) -> AsyncGenerator[str, None]:
+async def generate_videos_with_progress(
+    prompt: str,
+    resolution: str,
+    aspect_ratio: str,
+    duration: int,
+    count: int = 1,
+    video_model: str = None,
+    ltx_version: str = None,
+    job_id: str = "",
+    disable_prompt_enhance: bool = False,
+    video_upscale=None,
+    upscale_detail=None,
+) -> AsyncGenerator[str, None]:
     """Progress wrapper for text-to-video (used from library page video mode)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
-            generate_single_video(prompt, resolution, aspect_ratio, duration)
+            generate_single_video(
+                prompt, resolution, aspect_ratio, duration,
+                video_model=video_model, ltx_version=ltx_version,
+                disable_prompt_enhance=disable_prompt_enhance,
+            )
         )
 
         percent = 0
@@ -1257,6 +1578,10 @@ async def generate_videos_with_progress(prompt: str, resolution: str, aspect_rat
             await asyncio.sleep(2)
 
         result = await task
+        from services.video_upscale_service import maybe_upscale_video_result
+        result = await maybe_upscale_video_result(
+            result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+        )
 
         yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 100})}\n\n"
 
@@ -1267,7 +1592,8 @@ async def generate_videos_with_progress(prompt: str, resolution: str, aspect_rat
                 'local_filename': result['local_filename'],
                 'width': result['width'],
                 'height': result['height'],
-                'duration': result.get('duration', duration)
+                'duration': result.get('duration', duration),
+                'upscale': result.get('upscale')
             })}\n\n"
         else:
             yield f"data: {json.dumps({
@@ -1283,14 +1609,23 @@ async def generate_image_to_videos_with_progress(
     resolution: str,
     aspect_ratio: str,
     duration: int,
-    count: int = 1
+    count: int = 1,
+    video_model: str = None,
+    ltx_version: str = None,
+    job_id: str = "",
+    video_upscale=None,
+    upscale_detail=None,
 ) -> AsyncGenerator[str, None]:
     """Progress wrapper for image-to-video generation (used from modal 'Create Video From this')."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
-            generate_single_image_to_video(source_image_filename, prompt, resolution, aspect_ratio, duration)
+            generate_single_image_to_video(
+                source_image_filename, prompt, resolution, aspect_ratio, duration,
+                video_model=video_model, ltx_version=ltx_version,
+            )
         )
 
         percent = 0
@@ -1300,6 +1635,10 @@ async def generate_image_to_videos_with_progress(
             await asyncio.sleep(2)
 
         result = await task
+        from services.video_upscale_service import maybe_upscale_video_result
+        result = await maybe_upscale_video_result(
+            result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+        )
 
         yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 100})}\n\n"
 
@@ -1310,7 +1649,8 @@ async def generate_image_to_videos_with_progress(
                 'local_filename': result['local_filename'],
                 'width': result['width'],
                 'height': result['height'],
-                'duration': result.get('duration', duration)
+                'duration': result.get('duration', duration),
+                'upscale': result.get('upscale')
             })}\n\n"
         else:
             yield f"data: {json.dumps({
@@ -1327,14 +1667,23 @@ async def generate_image_audio_to_videos_with_progress(
     resolution: str,
     aspect_ratio: str,
     duration: int,
-    count: int = 1
+    count: int = 1,
+    ltx_version: str = None,
+    video_model: str = None,
+    job_id: str = "",
+    video_upscale=None,
+    upscale_detail=None,
 ) -> AsyncGenerator[str, None]:
     """Progress wrapper for image+audio-to-video generation (used when audio modifier + video selected in modal)."""
     for i in range(count):
         yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
 
+        set_progress_job(job_id, i)
         task = asyncio.create_task(
-            generate_single_image_audio_to_video(source_image_filename, audio_filename, prompt, resolution, aspect_ratio, duration)
+            generate_single_image_audio_to_video(
+                source_image_filename, audio_filename, prompt, resolution, aspect_ratio, duration,
+                ltx_version=ltx_version, video_model=video_model,
+            )
         )
 
         percent = 0
@@ -1344,6 +1693,10 @@ async def generate_image_audio_to_videos_with_progress(
             await asyncio.sleep(2)
 
         result = await task
+        from services.video_upscale_service import maybe_upscale_video_result
+        result = await maybe_upscale_video_result(
+            result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+        )
 
         yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 100})}\n\n"
 
@@ -1354,7 +1707,62 @@ async def generate_image_audio_to_videos_with_progress(
                 'local_filename': result['local_filename'],
                 'width': result['width'],
                 'height': result['height'],
-                'duration': result.get('duration', duration)
+                'duration': result.get('duration', duration),
+                'upscale': result.get('upscale')
+            })}\n\n"
+        else:
+            yield f"data: {json.dumps({
+                'type': 'error',
+                'index': i,
+                'error': result.get('error', 'Unknown error')
+            })}\n\n"
+
+async def generate_fasth3_multi_ref_videos_with_progress(
+    ref_images: list,
+    ref_audios: list,
+    prompt: str,
+    resolution: str,
+    aspect_ratio: str,
+    duration: float,
+    count: int = 1,
+    job_id: str = "",
+    video_upscale=None,
+    upscale_detail=None,
+) -> AsyncGenerator[str, None]:
+    """Progress wrapper for FastH3 multi-reference video generation."""
+    for i in range(count):
+        yield f"data: {json.dumps({'type': 'start', 'index': i})}\n\n"
+
+        set_progress_job(job_id, i)
+        task = asyncio.create_task(
+            generate_fasth3_multi_ref_video(
+                ref_images, ref_audios, prompt, resolution, aspect_ratio, duration
+            )
+        )
+
+        percent = 0
+        while not task.done():
+            percent = min(percent + 8, 92)
+            yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': percent})}\n\n"
+            await asyncio.sleep(2)
+
+        result = await task
+        from services.video_upscale_service import maybe_upscale_video_result
+        result = await maybe_upscale_video_result(
+            result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+        )
+
+        yield f"data: {json.dumps({'type': 'progress', 'index': i, 'percent': 100})}\n\n"
+
+        if result.get("success"):
+            yield f"data: {json.dumps({
+                'type': 'video_ready',
+                'index': i,
+                'local_filename': result['local_filename'],
+                'width': result.get('width', 0),
+                'height': result.get('height', 0),
+                'duration': result.get('duration', duration),
+                'upscale': result.get('upscale')
             })}\n\n"
         else:
             yield f"data: {json.dumps({

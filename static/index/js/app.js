@@ -6,17 +6,16 @@ let isTauri = false;
 let isComfyConnected = false;
 let isOllamaConnected = false;
 let allAssets = [];
-let projects = [];
 let windows = {};
 let windowZIndex = 10;
 let nextWindowId = 1;
-let assetCache = {};
-let chatMessages = [];
-let chatSessions = [];
-let currentSessionId = null;
 let _windowStates = {};
 
 let currentImageModel = 'schnell';
+let currentI2iModel = 'klein';
+let currentVideoModel = 'ltx';
+let currentLtxVersion = '2.3';
+let currentFastH3Mode = 'reference';
 let qwenTurbo = false;
 
 // ============================================================
@@ -967,13 +966,13 @@ function showGenToastPanel(count) {
     const card = document.createElement('div');
     card.className = 'gen-toast-card';
     card.style.aspectRatio = ratio;
-    card.innerHTML = '<div class="spinner"></div>';
+    card.innerHTML = '<div class="spinner"></div><div class="gen-toast-progress"><div class="gen-toast-progress-fill"></div><span class="gen-toast-progress-text"></span></div>';
     panel.appendChild(card);
     _genToastState.cards.push(card);
   }
 }
 
-function fillGenToastCard(idx, innerHTML, onDone) {
+function fillGenToastCard(idx, innerHTML, onDone, delay = 1500) {
   const card = _genToastState.cards[idx];
   if (!card) return;
   card.innerHTML = innerHTML;
@@ -993,6 +992,58 @@ function fillGenToastCard(idx, innerHTML, onDone) {
       }
     }, { once: true });
   }, 1500);
+}
+
+function updateGenToastProgress(index, p) {
+  const cards = _genToastState.cards;
+  const card = (typeof index === 'number' && cards[index])
+    ? cards[index]
+    : cards.find(c => c && c.isConnected && c.querySelector('.gen-toast-progress'));
+  if (!card) return;
+  const fill = card.querySelector('.gen-toast-progress-fill');
+  const text = card.querySelector('.gen-toast-progress-text');
+  if (p && p.stage === 'upscaling') {
+    const wf = Math.max(0, Math.min(100, Number(p.workflow_percent) || 0));
+    if (fill) fill.style.width = wf + '%';
+    if (text) text.textContent = 'Upscaling 2\u00d7 \u00b7 ' + wf + '%';
+    return;
+  }
+  const wf = Math.max(0, Math.min(100, Number(p.workflow_percent) || 0));
+  const node = Math.max(0, Math.min(100, Number(p.node_percent) || 0));
+  if (fill) fill.style.width = wf + '%';
+  if (text) text.textContent = `Workflow ${wf}% · Node ${node}%`;
+}
+
+function startProgressPolling(jobId, onUpdate, options = {}) {
+  const stopOnFinished = options.stopOnFinished !== false;
+  let stopped = false;
+  let timer = null;
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const p = await apiGet('/comfy/progress/' + encodeURIComponent(jobId));
+      if (!stopped && p) onUpdate(p);
+      if (p && stopOnFinished && (p.state === 'finished' || p.state === 'error')) { stopped = true; return; }
+    } catch (_) {}
+    if (!stopped) timer = setTimeout(tick, 500);
+  };
+  tick();
+  return () => { stopped = true; if (timer) clearTimeout(timer); };
+}
+
+function autoResizeBbInput() {
+  const el = document.getElementById('bb-input');
+  if (!el || el.tagName !== 'TEXTAREA') return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  updateAttachmentsBarPosition();
+}
+
+function updateAttachmentsBarPosition() {
+  const bar = document.getElementById('bb-attachments');
+  const bottom = document.getElementById('bottom-bar');
+  if (!bar || !bottom) return;
+  bar.style.bottom = (20 + (bottom.offsetHeight || 0) + 8) + 'px';
 }
 
 async function refreshLibraryScrollPreserved(wid) {
@@ -1232,8 +1283,8 @@ function launchApp(app) {
   switch (app) {
     case 'generator': openGenerator(); break;
     case 'library': openLibrary(); break;
-    case 'chat': openChat(); break;
-    case 'director': openDirector(); break;
+    case 'musicvideo': openMusicVideo(); break;
+    case 'singleframe': openSingleFrame(); break;
   }
 }
 
@@ -1416,13 +1467,14 @@ function getActiveAR(wid) {
 // ============================================================
 let libraryDensity = 'full';
 let libraryFilters = ['image'];
+let libSelectedAssetId = null;
 let libResizeObs = null;
 
 async function openLibrary() {
   try {
     const s = await apiGet('/settings');
     libraryDensity = s.library_density === 'compact' ? 'compact' : 'full';
-    libraryFilters = Array.isArray(s.library_filters) ? s.library_filters.filter(t => ['image','video','audio'].includes(t)) : [];
+    libraryFilters = Array.isArray(s.library_filters) ? s.library_filters.filter(t => ['image','video','audio','favorite','character','voice'].includes(t)) : [];
     _windowStates = s.window_states || {};
   } catch (e) { libraryDensity = 'full'; libraryFilters = []; }
 
@@ -1435,13 +1487,16 @@ async function openLibrary() {
           <small>Images, Video, Audio</small>
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:6px;row-gap:6px;margin-bottom:8px;flex-shrink:0;flex-wrap:wrap">
         <button id="lib-view-full" class="lib-view-btn${libraryDensity === 'full' ? ' active' : ''}" title="Full"><i class="fa-solid fa-th-large"></i></button>
         <button id="lib-view-compact" class="lib-view-btn${libraryDensity === 'compact' ? ' active' : ''}" title="Compact"><i class="fa-solid fa-th"></i></button>
         <span style="width:1px;height:18px;background:#d1d5db;margin:0 4px"></span>
         <button class="lib-filter-btn${libraryFilters.includes('image') ? ' active' : ''}" data-type="image"><i class="fa-solid fa-image"></i> Images</button>
         <button class="lib-filter-btn${libraryFilters.includes('video') ? ' active' : ''}" data-type="video"><i class="fa-solid fa-video"></i> Videos</button>
         <button class="lib-filter-btn${libraryFilters.includes('audio') ? ' active' : ''}" data-type="audio"><i class="fa-solid fa-music"></i> Audio</button>
+        <button class="lib-filter-btn${libraryFilters.includes('voice') ? ' active' : ''}" data-type="voice"><i class="fa-solid fa-microphone"></i> Voices</button>
+        <button class="lib-filter-btn${libraryFilters.includes('favorite') ? ' active' : ''}" data-type="favorite"><i class="fa-solid fa-star"></i> Favourites</button>
+        <button class="lib-filter-btn${libraryFilters.includes('character') ? ' active' : ''}" data-type="character"><i class="fa-solid fa-user"></i> Characters</button>
         <span style="flex:1"></span>
         <span id="lib-count" style="font-size:11px;color:#555"></span>
       </div>
@@ -1566,6 +1621,26 @@ async function toggleFavorite(asset, wid) {
     renderLibrary(wid);
   } catch (e) {
     asset.favorite = !asset.favorite;
+  }
+}
+
+async function toggleCharacter(asset, wid) {
+  asset.character = !asset.character;
+  try {
+    await apiPost('/update-generation', { id: asset.id, character: asset.character });
+    renderLibrary(wid);
+  } catch (e) {
+    asset.character = !asset.character;
+  }
+}
+
+async function toggleVoice(asset, wid) {
+  asset.voice = !asset.voice;
+  try {
+    await apiPost('/update-generation', { id: asset.id, voice: asset.voice });
+    renderLibrary(wid);
+  } catch (e) {
+    asset.voice = !asset.voice;
   }
 }
 
@@ -1715,20 +1790,31 @@ function renderLibrary(wid) {
   const countEl = document.getElementById('lib-count');
   if (!masonry) return;
 
-  const activeTypes = [];
-  document.querySelectorAll(`#${wid} .lib-filter-btn.active`).forEach(b => activeTypes.push(b.dataset.type));
+  const activeFilters = [];
+  document.querySelectorAll(`#${wid} .lib-filter-btn.active`).forEach(b => activeFilters.push(b.dataset.type));
+  const activeTypes = activeFilters.filter(t => t === 'image' || t === 'video' || t === 'audio');
+  const wantFavorite = activeFilters.includes('favorite');
+  const wantCharacter = activeFilters.includes('character');
+  const wantVoice = activeFilters.includes('voice');
 
   const { assets, childrenMap } = _libCache;
 
-  let filtered = [];
-  if (activeTypes.length) {
+  let filtered = assets;
+  if (activeFilters.length) {
     filtered = assets.filter(a => {
-      const isVideo = a.type === 'video' || (a.filename && a.filename.endsWith('.mp4'));
-      const isAudio = a.type === 'audio' || (a.filename && /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(a.filename));
-      const isImage = !isVideo && !isAudio;
-      return (activeTypes.includes('image') && isImage) ||
-             (activeTypes.includes('video') && isVideo) ||
-             (activeTypes.includes('audio') && isAudio);
+      if (activeTypes.length) {
+        const isVideo = a.type === 'video' || (a.filename && a.filename.endsWith('.mp4'));
+        const isAudio = a.type === 'audio' || (a.filename && /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(a.filename));
+        const isImage = !isVideo && !isAudio;
+        const matchesType = (activeTypes.includes('image') && isImage) ||
+                            (activeTypes.includes('video') && isVideo) ||
+                            (activeTypes.includes('audio') && isAudio);
+        if (!matchesType) return false;
+      }
+      if (wantFavorite && !a.favorite) return false;
+      if (wantCharacter && !a.character) return false;
+      if (wantVoice && !a.voice) return false;
+      return true;
     });
   }
 
@@ -1816,7 +1902,8 @@ function renderLibrary(wid) {
           src: url,
           aspect: safeAr,
           id: a.id || '',
-          prompt: (a.prompt || '').trim()
+          prompt: (a.prompt || '').trim(),
+          voice: !!a.voice
         });
         e.dataTransfer.setData('application/json', payload);
         e.dataTransfer.setData('text/plain', payload);
@@ -1855,6 +1942,24 @@ function renderLibrary(wid) {
       bottomLeft.appendChild(star);
     }
 
+    if (a.character) {
+      const charIcon = document.createElement('span');
+      charIcon.style.cssText = 'color:#38bdf8;font-size:11px;cursor:pointer;filter:drop-shadow(0 0 2px rgba(0,0,0,0.8))';
+      charIcon.innerHTML = '<i class="fa-solid fa-user"></i>';
+      charIcon.title = 'Remove character flag';
+      charIcon.onclick = (e) => { e.stopPropagation(); toggleCharacter(a, wid); };
+      bottomLeft.appendChild(charIcon);
+    }
+
+    if (isAudio) {
+      const voiceIcon = document.createElement('span');
+      voiceIcon.style.cssText = `color:${a.voice ? '#a78bfa' : '#777'};font-size:11px;cursor:pointer;filter:drop-shadow(0 0 2px rgba(0,0,0,0.8))`;
+      voiceIcon.innerHTML = a.voice ? '<i class="fa-solid fa-microphone"></i>' : '<i class="fa-regular fa-microphone"></i>';
+      voiceIcon.title = a.voice ? 'Remove voice flag' : 'Mark as voice';
+      voiceIcon.onclick = (e) => { e.stopPropagation(); toggleVoice(a, wid); };
+      bottomLeft.appendChild(voiceIcon);
+    }
+
     const trash = document.createElement('span');
     trash.style.cssText = 'color:#ef4444;font-size:11px;cursor:pointer;filter:drop-shadow(0 0 2px rgba(0,0,0,0.8))';
     trash.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
@@ -1871,6 +1976,7 @@ function renderLibrary(wid) {
       card.appendChild(tmp.firstElementChild);
     }
 
+    if (a.id && a.id === libSelectedAssetId) card.classList.add('lib-selected');
     card.onclick = (e) => { if (!e.target.closest('button,span,i,.fa-star,.fa-trash-can,.var-badge')) updatePreviewContent(a, wid); };
     masonry.appendChild(card);
     columnHeights[sc] += cardHeight + gap;
@@ -1892,6 +1998,13 @@ function findRelated(asset) {
   return [...(entry.imageChildren || []), ...(entry.videoChildren || []), ...(entry.audioChildren || [])];
 }
 
+function sanitizeFilename(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function renderPreviewInto(asset, libWid, wid) {
   // Same content-building as openPreview
   const isVideo = asset.type === 'video' || (asset.filename && asset.filename.endsWith('.mp4'));
@@ -1901,6 +2014,9 @@ function renderPreviewInto(asset, libWid, wid) {
   const dur = asset.metadata?.duration ? `${asset.metadata.duration}s` : '';
   const badgeText = [dur, dims].filter(Boolean).join(' \u2022 ');
   const related = findRelated(asset);
+
+  const assetMeta = parseAssetMetadata(asset);
+  const upscaleDone = isVideo && !!(assetMeta.gen && assetMeta.gen.upscale && assetMeta.gen.upscale.status === 'done');
 
   let relatedHTML = '';
   if (related.length) {
@@ -1934,14 +2050,21 @@ function renderPreviewInto(asset, libWid, wid) {
   const content = `
     <div style="display:flex;flex-direction:column;height:100%;background:#000;color:#fff">
       <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:#111;flex-shrink:0;min-height:32px">
-        <span style="flex:1;font-size:12px;line-height:1.3;word-break:break-word">${asset.prompt || ''}</span>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          ${asset.metadata?.name ? `<span style="font-size:12px;line-height:1.3;font-weight:600;word-break:break-word">${escHtml(asset.metadata.name)}</span>` : ''}
+          <span style="font-size:${asset.metadata?.name ? '11px' : '12px'};line-height:1.3;word-break:break-word${asset.metadata?.name ? ';opacity:0.7' : ''}">${escHtml(asset.prompt || '')}</span>
+        </div>
         <button id="pv-dl" title="Download" style="background:none;border:none;color:#888;cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-download"></i></button>
-        <button id="pv-fav" title="${asset.favorite ? 'Remove from favorites' : 'Add to favorites'}" style="background:none;border:none;color:${asset.favorite ? '#facc15' : '#555'};cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-star"></i></button>
-        <button id="pv-trash" title="Delete" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-trash-can"></i></button>${isVideo || isAudio ? '' : `
-        <button id="pv-var" title="Generate Variations" style="background:none;border:none;color:#60a5fa;cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #60a5fa;border-radius:4px;flex-shrink:0;white-space:nowrap">Variations</button>
-        <button id="pv-vid" title="Create Video from This" style="background:none;border:none;color:#22c55e;cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #22c55e;border-radius:4px;flex-shrink:0;white-space:nowrap">To Video</button>`}
+        <button id="pv-fav" title="${asset.favorite ? 'Remove from favorites' : 'Add to favorites'}" style="background:none;border:none;color:${asset.favorite ? '#facc15' : '#555'};cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-star"></i></button>${isAudio ? `
+        <button id="pv-voice" title="${asset.voice ? 'Remove voice flag' : 'Mark as voice'}" style="background:none;border:none;color:${asset.voice ? '#a78bfa' : '#555'};cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-microphone"></i></button>` : ''}${(!isVideo && !isAudio) ? `
+        <button id="pv-char" title="${asset.character ? 'Remove character flag' : 'Mark as character'}" style="background:none;border:none;color:${asset.character ? '#38bdf8' : '#555'};cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-user"></i></button>` : ''}
+        <button id="pv-trash" title="Delete" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;flex-shrink:0"><i class="fa-solid fa-trash-can"></i></button>${(!isVideo && !isAudio) ? `
+        <button id="pv-var" title="Generate Variations" style="background:none;border:none;color:#60a5fa;cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #60a5fa;border-radius:4px;flex-shrink:0;white-space:nowrap">Variations</button>` : ''}${isVideo ? `
+        <button id="pv-upscale" title="${upscaleDone ? 'Already upscaled' : 'RelayVSR 2× upscale'}" ${upscaleDone ? 'disabled' : ''} style="background:none;border:1px solid #f59e0b;color:#f59e0b;cursor:${upscaleDone ? 'default' : 'pointer'};font-size:11px;padding:2px 6px;border-radius:4px;flex-shrink:0;white-space:nowrap;${upscaleDone ? 'opacity:0.5' : ''}">${upscaleDone ? 'Upscaled' : 'Upscale 2×'}</button>` : ''}${!isAudio ? `
+        <button id="pv-to-prompt" title="Load prompt into bottom bar" style="background:none;border:none;color:#a855f7;cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #a855f7;border-radius:4px;flex-shrink:0;white-space:nowrap">To Prompt</button>` : ''}${(!isVideo && !isAudio) ? `
+        <button id="pv-vid" title="Create Video from This" style="background:none;border:none;color:#22c55e;cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #22c55e;border-radius:4px;flex-shrink:0;white-space:nowrap">To Video</button>` : ''}
       </div>
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative">
+      <div id="pv-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative">
         <button id="pv-prev" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);z-index:20;background:rgba(0,0,0,0.6);border:none;color:#fff;width:32px;height:32px;border-radius:50%;display:none;align-items:center;justify-content:center;cursor:pointer;font-size:14px"><i class="fa-solid fa-chevron-left"></i></button>
         <button id="pv-next" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);z-index:20;background:rgba(0,0,0,0.6);border:none;color:#fff;width:32px;height:32px;border-radius:50%;display:none;align-items:center;justify-content:center;cursor:pointer;font-size:14px"><i class="fa-solid fa-chevron-right"></i></button>
         ${isVideo
@@ -1967,8 +2090,9 @@ function renderPreviewInto(asset, libWid, wid) {
                   <span id="pv-time" style="font-size:10px;color:#aaa;white-space:nowrap;min-width:60px;text-align:right">0:00 / 0:00</span>
                 </div>
                </div>`
-            : `<img id="pv-media" src="${url}" style="max-width:100%;max-height:100%;object-fit:contain">`
+            : `<img id="pv-media" src="${url}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;transform-origin:center center;will-change:transform;cursor:zoom-in">`
         }
+        <div id="pv-zoom-ind" style="position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,0.7);color:#ccc;font-size:11px;padding:2px 6px;border-radius:3px;display:none;pointer-events:none">100%</div>
         ${badgeText ? `<div style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ccc;font-size:11px;padding:2px 6px;border-radius:3px">${badgeText}</div>` : ''}
       </div>
       ${relatedHTML}
@@ -1985,7 +2109,11 @@ function renderPreviewInto(asset, libWid, wid) {
 
     document.getElementById('pv-dl').onclick = () => {
       const a = document.createElement('a');
-      a.href = url; a.download = asset.filename || 'download';
+      const extMatch = (asset.filename || '').match(/\.[^.\/]+$/);
+      const ext = extMatch ? extMatch[0] : '';
+      const niceName = asset.metadata?.name ? sanitizeFilename(asset.metadata.name) : '';
+      a.href = url;
+      a.download = niceName ? (niceName + ext) : (asset.filename || 'download');
       document.body.appendChild(a); a.click(); a.remove();
     };
 
@@ -2000,6 +2128,40 @@ function renderPreviewInto(asset, libWid, wid) {
       try { await apiPost('/update-generation', { id: asset.id, favorite: fav }); renderLibrary(libWid); } catch (e) {}
     };
 
+    const voiceBtn = document.getElementById('pv-voice');
+    if (voiceBtn) {
+      let isVoice = !!asset.voice;
+      voiceBtn.onclick = async () => {
+        isVoice = !isVoice;
+        voiceBtn.style.color = isVoice ? '#a78bfa' : '#555';
+        voiceBtn.title = isVoice ? 'Remove voice flag' : 'Mark as voice';
+        asset.voice = isVoice;
+        const a = _libCache.assets.find(x => x.id === asset.id);
+        if (a) a.voice = isVoice;
+        try { await apiPost('/update-generation', { id: asset.id, voice: isVoice }); renderLibrary(libWid); } catch (e) {
+          isVoice = !isVoice;
+          voiceBtn.style.color = isVoice ? '#a78bfa' : '#555';
+          voiceBtn.title = isVoice ? 'Remove voice flag' : 'Mark as voice';
+          asset.voice = isVoice;
+          if (a) a.voice = isVoice;
+        }
+      };
+    }
+
+    const charBtn = document.getElementById('pv-char');
+    if (charBtn) {
+      let isChar = !!asset.character;
+      charBtn.onclick = async () => {
+        isChar = !isChar;
+        charBtn.style.color = isChar ? '#38bdf8' : '#555';
+        charBtn.title = isChar ? 'Remove character flag' : 'Mark as character';
+        asset.character = isChar;
+        const a = _libCache.assets.find(x => x.id === asset.id);
+        if (a) a.character = isChar;
+        try { await apiPost('/update-generation', { id: asset.id, character: isChar }); renderLibrary(libWid); } catch (e) {}
+      };
+    }
+
     document.getElementById('pv-trash').onclick = async () => {
       if (!confirm('Delete this item? This cannot be undone.')) return;
       try {
@@ -2011,6 +2173,44 @@ function renderPreviewInto(asset, libWid, wid) {
       } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
     };
 
+    const toPromptBtn = document.getElementById('pv-to-prompt');
+    if (toPromptBtn) toPromptBtn.onclick = () => applyGenToBottomBar(asset);
+
+    const upscaleBtn = document.getElementById('pv-upscale');
+    if (upscaleBtn) upscaleBtn.onclick = async () => {
+      if (_isGenerating || upscaleBtn.disabled) return;
+      _isGenerating = true;
+      showGenToastPanel(1);
+      document.querySelector('.bb-inner')?.classList.add('is-generating');
+      const jobId = 'pvup_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      const stopProgress = startProgressPolling(jobId, (p) => updateGenToastProgress(0, p));
+      try {
+        const res = await apiPost('/upscale-video', { asset_id: asset.id, job_id: jobId });
+        if (res && res.success) {
+          const rr = res.result || {};
+          const savedAsset = res.asset || {};
+          const filename = rr.local_filename || savedAsset.filename || '';
+          const dur = rr.duration || savedAsset.duration || null;
+          const badge = dur ? `${dur}s` : '';
+          if (filename) {
+            const html = `<video src="/videos/${filename}" muted loop autoplay playsinline style="width:100%;height:100%;object-fit:cover"></video>${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
+            fillGenToastCard(0, html, () => refreshLibraryFromDB());
+          }
+          await refreshLibraryFromDB();
+          showToast('Upscaled video saved to Library');
+        } else {
+          showToast((res && res.error) || 'Upscale failed — RelayVSR may be unavailable in ComfyUI', 'error');
+          cleanupGenToast();
+        }
+      } catch (e) {
+        showToast('Upscale failed: ' + e.message, 'error');
+        cleanupGenToast();
+      } finally {
+        stopProgress();
+        _isGenerating = false;
+      }
+    };
+
     if (!isVideo && !isAudio) {
       const arStr = asset.aspect_ratio || (asset.width && asset.height ? `${asset.width}:${asset.height}` : bbAr);
 
@@ -2020,11 +2220,13 @@ function renderPreviewInto(asset, libWid, wid) {
         const count = 4;
         showGenToastPanel(count);
         document.querySelector('.bb-inner')?.classList.add('is-generating');
+        const jobId = 'pvvar_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+        const stopProgress = startProgressPolling(jobId, (p) => updateGenToastProgress(p.index ?? 0, p));
         try {
           const r = await fetch('/generate/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: asset.prompt || '', resolution: bbRes, aspect_ratio: arStr, mode: 'image', source_image: asset.filename }),
+            body: JSON.stringify({ prompt: asset.prompt || '', resolution: bbRes, aspect_ratio: arStr, mode: 'image', source_image: asset.filename, job_id: jobId }),
           });
           const reader = r.body.getReader();
           const decoder = new TextDecoder();
@@ -2039,7 +2241,23 @@ function renderPreviewInto(asset, libWid, wid) {
               if (!line.startsWith('data: ')) continue;
               const ev = JSON.parse(line.substring(6));
               if (ev.type === 'image_ready' && idx < count) {
-                try { await apiPost('/save-generation', { prompt: asset.prompt || '', filename: ev.local_filename, type: 'image', aspect_ratio: arStr, width: ev.width || 0, height: ev.height || 0, parent_id: asset.id }); } catch (_) {}
+                try {
+                  await apiPost('/save-generation', {
+                    prompt: asset.prompt || '', filename: ev.local_filename, type: 'image',
+                    aspect_ratio: arStr, width: ev.width || 0, height: ev.height || 0, parent_id: asset.id,
+                    metadata: {
+                      gen: {
+                        mode: 'image', resolution: bbRes, aspect_ratio: arStr, duration: null,
+                        enhancer_id: 'none', original_prompt: asset.prompt || '',
+                        image_model: currentImageModel || 'schnell', i2i_model: currentI2iModel || 'klein',
+                        attachments: {
+                          images: [{ id: asset.id || '', name: asset.filename || '', type: 'image' }],
+                          audio: null, lora: null,
+                        },
+                      },
+                    },
+                  });
+                } catch (_) {}
                 const badge = ev.width && ev.height ? `${ev.width}x${ev.height}` : '';
                 const html = `<img src="/images/${ev.local_filename}" loading="lazy">${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
                 fillGenToastCard(idx, html, () => refreshLibraryScrollPreserved(libWid));
@@ -2049,6 +2267,7 @@ function renderPreviewInto(asset, libWid, wid) {
           }
           if (idx === 0) { showToast('No results', 'error'); cleanupGenToast(); }
         } catch (e) { showToast('Variations failed: ' + e.message, 'error'); cleanupGenToast(); }
+        finally { stopProgress(); }
       };
 
       document.getElementById('pv-vid').onclick = async () => {
@@ -2056,13 +2275,32 @@ function renderPreviewInto(asset, libWid, wid) {
         _isGenerating = true;
         showGenToastPanel(1);
         document.querySelector('.bb-inner')?.classList.add('is-generating');
+        const jobId = 'pvvideo_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+        const stopProgress = startProgressPolling(jobId, (p) => updateGenToastProgress(0, p));
         try {
-          const res = await apiPost('/generate', { prompt: asset.prompt || '', resolution: bbRes, aspect_ratio: arStr, mode: 'video', duration: bbDuration, source_image: asset.filename });
+          const res = await apiPost('/generate', { prompt: asset.prompt || '', resolution: bbRes, aspect_ratio: arStr, mode: 'video', duration: bbDuration, source_image: asset.filename, ltx_version: currentLtxVersion, fasth3_mode: currentFastH3Mode || 'reference', job_id: jobId });
           if (res.success && res.results) {
             for (let idx = 0; idx < res.results.length; idx++) {
               const r = res.results[idx];
               if (r.success) {
-                try { await apiPost('/save-generation', { prompt: asset.prompt || '', filename: r.local_filename, type: 'video', aspect_ratio: arStr, width: r.width || 0, height: r.height || 0, duration: r.duration || null, parent_id: asset.id }); } catch (_) {}
+                try {
+                  await apiPost('/save-generation', {
+                    prompt: asset.prompt || '', filename: r.local_filename, type: 'video',
+                    aspect_ratio: arStr, width: r.width || 0, height: r.height || 0,
+                    duration: r.duration || null, parent_id: asset.id,
+                    metadata: {
+                      gen: {
+                        mode: 'video', resolution: bbRes, aspect_ratio: arStr, duration: bbDuration,
+                        enhancer_id: 'none', original_prompt: asset.prompt || '',
+                        image_model: currentImageModel || 'schnell', i2i_model: currentI2iModel || 'klein',
+                        attachments: {
+                          images: [{ id: asset.id || '', name: asset.filename || '', type: 'image' }],
+                          audio: null, lora: null,
+                        },
+                      },
+                    },
+                  });
+                } catch (_) {}
                 const badge = r.duration ? `${r.duration}s` : '';
                 const html = `<video src="/videos/${r.local_filename}" muted loop autoplay playsinline style="width:100%;height:100%;object-fit:cover"></video>${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
                 fillGenToastCard(idx, html, () => refreshLibraryScrollPreserved(libWid));
@@ -2070,6 +2308,7 @@ function renderPreviewInto(asset, libWid, wid) {
             }
           } else { showToast('Video generation failed', 'error'); cleanupGenToast(); }
         } catch (e) { showToast('Failed: ' + e.message, 'error'); cleanupGenToast(); }
+        finally { stopProgress(); }
       };
     }
 
@@ -2085,8 +2324,14 @@ function renderPreviewInto(asset, libWid, wid) {
       let isSeeking = false;
 
       if (el && playBtn) {
-        if (isVideo) el.muted = true;
-        if (volSlider) el.volume = parseFloat(volSlider.value) / 100;
+        if (isVideo) el.muted = previewMuted;
+        if (volSlider) {
+          volSlider.value = String(Math.round(previewVolume * 100));
+          el.volume = previewVolume;
+        }
+        if (muteBtn) muteBtn.innerHTML = previewMuted
+          ? '<i class="fa-solid fa-volume-xmark"></i>'
+          : '<i class="fa-solid fa-volume-high"></i>';
         const fmt = (s) => { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return m + ':' + (sec < 10 ? '0' : '') + sec; };
         el.addEventListener('timeupdate', () => {
           if (!isSeeking && seek) seek.value = el.duration ? (el.currentTime / el.duration * 100) : 0;
@@ -2112,16 +2357,92 @@ function renderPreviewInto(asset, libWid, wid) {
         }
 
         if (volSlider) volSlider.addEventListener('input', () => {
-          el.volume = parseFloat(volSlider.value) / 100;
-          if (parseFloat(volSlider.value) > 0 && el.muted) { el.muted = false; if (muteBtn) muteBtn.innerHTML = '<i class="fa-solid fa-volume-high"></i>'; }
-          if (parseFloat(volSlider.value) === 0 && !el.muted) { el.muted = true; if (muteBtn) muteBtn.innerHTML = '<i class="fa-solid fa-volume-xmark"></i>'; }
+          previewVolume = parseFloat(volSlider.value) / 100;
+          el.volume = previewVolume;
+          if (previewVolume > 0 && previewMuted) { previewMuted = false; el.muted = false; if (muteBtn) muteBtn.innerHTML = '<i class="fa-solid fa-volume-high"></i>'; }
+          if (previewVolume === 0 && !previewMuted) { previewMuted = true; el.muted = true; if (muteBtn) muteBtn.innerHTML = '<i class="fa-solid fa-volume-xmark"></i>'; }
         });
 
         if (muteBtn) muteBtn.onclick = () => {
-          el.muted = !el.muted;
-          muteBtn.innerHTML = el.muted ? '<i class="fa-solid fa-volume-xmark"></i>' : '<i class="fa-solid fa-volume-high"></i>';
-          if (volSlider && !el.muted) { el.volume = parseFloat(volSlider.value) / 100; }
+          previewMuted = !previewMuted;
+          el.muted = previewMuted;
+          muteBtn.innerHTML = previewMuted ? '<i class="fa-solid fa-volume-xmark"></i>' : '<i class="fa-solid fa-volume-high"></i>';
+          if (volSlider && !previewMuted) { el.volume = previewVolume; }
         };
+      }
+    }
+
+    // Image/video zoom: wheel to cursor, drag to pan, double-click to reset
+    if (!isAudio) {
+      const stage = document.getElementById('pv-stage');
+      const media = document.getElementById('pv-media');
+      const ind = document.getElementById('pv-zoom-ind');
+      if (stage && media) {
+        let scale = 1, tx = 0, ty = 0;
+        let dragging = false, dragStartX = 0, dragStartY = 0, startTx = 0, startTy = 0;
+        const MIN = 1, MAX = 8;
+        const clampScale = (v) => Math.min(MAX, Math.max(MIN, v));
+        media.style.transformOrigin = 'center center';
+        media.style.willChange = 'transform';
+        const apply = () => {
+          media.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+          media.style.cursor = scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'zoom-in';
+          if (ind) {
+            ind.textContent = Math.round(scale * 100) + '%';
+            ind.style.display = scale > 1 ? 'block' : 'none';
+          }
+        };
+
+        stage.addEventListener('wheel', (e) => {
+          if (e.target.closest('#pv-controls, button, input, select')) return;
+          e.preventDefault();
+          const rect = media.getBoundingClientRect();
+          const baseCenterX = rect.left + rect.width / 2 - tx;
+          const baseCenterY = rect.top + rect.height / 2 - ty;
+          const cx = e.clientX - baseCenterX;
+          const cy = e.clientY - baseCenterY;
+          const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+          const newScale = clampScale(scale * Math.exp(-delta * 0.0015));
+          const factor = newScale / scale;
+          tx = cx - (cx - tx) * factor;
+          ty = cy - (cy - ty) * factor;
+          scale = newScale;
+          if (scale <= MIN) { tx = 0; ty = 0; }
+          apply();
+        }, { passive: false });
+
+        media.addEventListener('dblclick', () => {
+          scale = 1; tx = 0; ty = 0;
+          apply();
+        });
+
+        media.addEventListener('pointerdown', (e) => {
+          if (scale <= 1) return;
+          e.preventDefault();
+          dragging = true;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+          startTx = tx;
+          startTy = ty;
+          try { media.setPointerCapture(e.pointerId); } catch (_) {}
+          apply();
+        });
+        media.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          tx = startTx + (e.clientX - dragStartX);
+          ty = startTy + (e.clientY - dragStartY);
+          apply();
+        });
+        const endDrag = (e) => {
+          if (!dragging) return;
+          dragging = false;
+          try { media.releasePointerCapture(e.pointerId); } catch (_) {}
+          apply();
+        };
+        media.addEventListener('pointerup', endDrag);
+        media.addEventListener('pointercancel', endDrag);
+
+        apply();
       }
     }
 
@@ -2167,7 +2488,18 @@ function renderPreviewInto(asset, libWid, wid) {
   }, 50);
 }
 
+function selectLibraryAsset(assetId, wid) {
+  libSelectedAssetId = assetId || null;
+  const masonry = document.getElementById('lib-masonry');
+  if (!masonry) return;
+  masonry.querySelectorAll('.lib-selected').forEach(el => el.classList.remove('lib-selected'));
+  if (!assetId) return;
+  const card = masonry.querySelector(`[data-asset-id="${CSS.escape(assetId)}"]`);
+  if (card) card.classList.add('lib-selected');
+}
+
 function updatePreviewContent(asset, libWid) {
+  selectLibraryAsset(asset.id, libWid);
   const existing = Object.entries(windows).find(([id, w]) => w.title === 'Preview');
   if (!existing) { openPreview(asset, libWid); return; }
   renderPreviewInto(asset, libWid, existing[0]);
@@ -2235,155 +2567,15 @@ function wireLibControls(wid) {
 }
 
 // ============================================================
-// APP: Chat
-// ============================================================
-async function readFileAsText(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = () => reject(new Error('Failed to read file'));
-    r.readAsText(file);
-  });
-}
-
-function mdToHtml(md) {
-  if (!md) return '';
-  let h = md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const c = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trimEnd();
-    return `<pre><code${lang ? ` class="lang-${lang}"` : ''}>${escHtml(c)}</code></pre>`;
-  });
-  h = h
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/_([^_]+)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  const lines = h.split('\n');
-  let inUl = false, inOl = false, out = [];
-  for (let line of lines) {
-    const hrMatch = line.match(/^\s*[-*_]{3,}\s*$/);
-    if (hrMatch) {
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (inOl) { out.push('</ol>'); inOl = false; }
-      out.push('<hr>');
-      continue;
-    }
-    const hdMatch = line.match(/^(#{1,6})\s+(.*)/);
-    if (hdMatch) {
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (inOl) { out.push('</ol>'); inOl = false; }
-      out.push(`<h${hdMatch[1].length}>${hdMatch[2]}</h${hdMatch[1].length}>`);
-      continue;
-    }
-    const ulMatch = line.match(/^(\s*)-\s+(.*)/);
-    const olMatch = line.match(/^(\s*)\d+\.\s+(.*)/);
-    if (ulMatch) {
-      if (inOl) { out.push('</ol>'); inOl = false; }
-      if (!inUl) { out.push('<ul>'); inUl = true; }
-      out.push(`<li>${ulMatch[2]}</li>`);
-    } else if (olMatch) {
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (!inOl) { out.push('<ol>'); inOl = true; }
-      out.push(`<li>${olMatch[2]}</li>`);
-    } else {
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (inOl) { out.push('</ol>'); inOl = false; }
-      out.push(line);
-    }
-  }
-  if (inUl) out.push('</ul>');
-  if (inOl) out.push('</ol>');
-  return out.join('\n').replace(/\n/g, '<br>');
-}
-
-function addMsg(role, content, push = true) {
-  if (push) chatMessages.push({ role, content });
-  const msgs = document.getElementById('chat-msgs');
-  if (!msgs) return;
-  const now = new Date();
-  const t = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).replace(/am|pm/i, m => m.toUpperCase());
-  const d = document.createElement('div');
-  d.className = `chat-msg ${role}`;
-  d.innerHTML = `<div class="msg-text">${mdToHtml(content)}</div><div class="msg-time">${t}</div>`;
-  msgs.appendChild(d);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-async function sendFileToChat(file) {
-  const text = await readFileAsText(file);
-  const bar = document.getElementById('chat-input-bar');
-  if (!bar) return;
-  bar.classList.add('is-generating');
-
-  // Ensure we have a session
-  if (!currentSessionId) {
-    try {
-      const session = await apiPost('/chat/sessions', {});
-      currentSessionId = session.id;
-      await loadChatSessions();
-      renderChatSidebar();
-    } catch (e) {
-      bar.classList.remove('is-generating');
-      showToast('Failed to create session', 'error');
-      return;
-    }
-  }
-
-  addMsg('user', '📄 ' + file.name);
-  try { await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'user', content: '📄 ' + file.name }] }); } catch (e) {}
-
-  const msgs = document.getElementById('chat-msgs');
-  const placeholder = document.createElement('div');
-  placeholder.className = 'chat-msg assistant';
-  placeholder.innerHTML = '<div class="spinner" style="width:16px;height:16px;margin:4px 0"></div>';
-  if (msgs) { msgs.appendChild(placeholder); msgs.scrollTop = msgs.scrollHeight; }
-  try {
-    const res = await apiPost('/chat', {
-      prompt: "I've attached a document. Use it to help answer my questions.",
-      attachment: { name: file.name, content: text },
-      history: chatMessages
-    });
-    if (placeholder.parentNode) placeholder.remove();
-    const reply = res.response || 'No response';
-    addMsg('assistant', reply);
-    try { await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'assistant', content: reply }] }); } catch (e) {}
-  } catch (e) {
-    if (placeholder.parentNode) placeholder.remove();
-    const errMsg = 'Error: ' + e.message;
-    addMsg('assistant', errMsg);
-    try { await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'assistant', content: errMsg }] }); } catch (e2) {}
-  } finally {
-    bar.classList.remove('is-generating');
-  }
-}
-
-async function showChatUpload() {
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.txt,.md,.json,.csv,.py,.js,.html,.css,.xml,.yaml,.yml,.toml,.ini,.cfg,.log,.env,.rtf,.doc,.docx';
-  fileInput.onchange = async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
-    try {
-      await sendFileToChat(file);
-    } catch (e) {
-      showToast('Upload failed: ' + e.message, 'error');
-    }
-  };
-  fileInput.click();
-}
-
-// ============================================================
 // Attachments bar + LoRA picker
 // ============================================================
 async function showLoraPicker() {
   if (_bbAttachments.some(a => a.type === 'lora')) { showToast('Only one LoRA allowed'); return; }
   try {
     const s = await apiGet('/settings');
-    if ((s.image_model || 'schnell') !== 'schnell') { showToast('LoRA requires Flux Schnell model — change in Models > Image Generation'); return; }
+    const m = s.image_model || 'schnell';
+    if (m === 'grok' || m === 'grok-quality') { showToast('LoRA is not supported with Grok Imagine — switch to Flux Schnell'); return; }
+    if (m !== 'schnell') { showToast('LoRA requires Flux Schnell model — change in Models > Image Generation'); return; }
   } catch (_) {} // proceed if settings unavailable
   let loras = [];
   try {
@@ -2430,19 +2622,39 @@ function renderAttachments() {
   const bar = document.getElementById('bb-attachments');
   if (!bar) return;
   bar.innerHTML = '';
-  if (!_bbAttachments.length) { bar.style.display = 'none'; return; }
-  bar.style.display = 'flex';
+  if (!_bbAttachments.length) {
+    bar.style.display = 'none';
+    updatePromptModelBadge();
+    return;
+  }
+  // Force visible (CSS default is display:none)
+  bar.style.setProperty('display', 'flex', 'important');
+  let imgNum = 0;
+  let audNum = 0;
   _bbAttachments.forEach((att, i) => {
     const el = document.createElement('div');
     el.className = 'bb-att';
+    let badge = '';
+    if (att.type === 'image' || att.type === 'video') {
+      imgNum++;
+      badge = '<span class="bb-att-num">Img ' + imgNum + '</span>';
+    } else if (att.type === 'audio') {
+      audNum++;
+      badge = '<span class="bb-att-num">Audio ' + audNum + '</span>';
+    } else if (att.type === 'voice') {
+      badge = '<span class="bb-att-num">Voice</span>';
+    }
     if (att.type === 'lora') {
       el.innerHTML = '<i class="fa-solid fa-layer-group" style="font-size:13px;color:#6366f1"></i><span class="bb-att-name">' + escHtml(att.name) + '</span>';
     } else if (att.type === 'image' || att.type === 'video') {
       const safeAspect = att.aspect && isFinite(att.aspect) ? att.aspect : 1.5;
-      el.innerHTML = '<img src="' + att.src + '" class="bb-att-img" style="aspect-ratio:' + safeAspect + '">';
+      el.innerHTML = badge + '<img src="' + att.src + '" class="bb-att-img" style="aspect-ratio:' + safeAspect + '">';
     } else if (att.type === 'audio') {
       const label = att.prompt || att.name;
-      el.innerHTML = '<i class="fa-solid fa-music" style="font-size:13px;color:#8b5cf6"></i><span class="bb-att-name">' + escHtml(label) + '</span>';
+      el.innerHTML = badge + '<i class="fa-solid fa-music" style="font-size:13px;color:#8b5cf6"></i><span class="bb-att-name">' + escHtml(label) + '</span>';
+    } else if (att.type === 'voice') {
+      const label = att.prompt || att.name;
+      el.innerHTML = badge + '<i class="fa-solid fa-microphone-lines" style="font-size:13px;color:#a78bfa"></i><span class="bb-att-name">' + escHtml(label) + '</span>';
     }
     const trash = document.createElement('span');
     trash.className = 'bb-att-trash';
@@ -2451,6 +2663,7 @@ function renderAttachments() {
     el.appendChild(trash);
     bar.appendChild(el);
   });
+  updatePromptModelBadge();
 }
 
 function escHtml(s) {
@@ -2459,262 +2672,59 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
-async function loadChatSessions() {
-  try {
-    chatSessions = await apiGet('/chat/sessions');
-  } catch (e) {
-    chatSessions = [];
-  }
-}
-
-async function renderChatSidebar() {
-  const list = document.getElementById('chat-sidebar-list');
-  if (!list) return;
-  if (!chatSessions.length) {
-    list.innerHTML = '<div class="chat-sidebar-list-empty">No chats yet</div>';
+function updatePromptHelpVisibility() {
+  const btn = document.getElementById('bb-prompt-help');
+  if (bbMode === 'speech') {
+    if (btn) btn.style.display = 'none';
+    const ov = document.getElementById('bb-help-overlay');
+    if (ov) ov.remove();
+    updateAutoPromptUI();
     return;
   }
-  list.innerHTML = chatSessions.map(s =>
-    `<div class="chat-session-item${s.id === currentSessionId ? ' active' : ''}" data-id="${s.id}">
-      <i class="fa-regular fa-comment" style="flex-shrink:0;font-size:10px"></i>
-      <span style="overflow:hidden;text-overflow:ellipsis">${escHtml(s.title)}</span>
-      <button class="ch-del" data-id="${s.id}"><i class="fa-solid fa-xmark"></i></button>
-    </div>`
-  ).join('');
-  list.querySelectorAll('.chat-session-item').forEach(el => {
-    el.addEventListener('click', (e) => {
-      if (e.target.closest('.ch-del')) return;
-      switchChatSession(el.dataset.id);
-    });
-  });
-  list.querySelectorAll('.ch-del').forEach(el => {
-    el.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await deleteChatSession(el.dataset.id);
-    });
-  });
-}
-
-async function switchChatSession(sessionId) {
-  if (sessionId === currentSessionId) return;
-  currentSessionId = sessionId;
-  chatMessages = [];
-  const msgs = document.getElementById('chat-msgs');
-  if (msgs) msgs.innerHTML = '';
-  try {
-    const ms = await apiGet(`/chat/sessions/${sessionId}/messages`);
-    chatMessages = ms;
-    chatMessages.forEach(m => addMsg(m.role, m.content, false));
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
-  } catch (e) {}
-  renderChatSidebar();
-}
-
-async function newChatSession() {
-  try {
-    const session = await apiPost('/chat/sessions', {});
-    currentSessionId = session.id;
-    chatMessages = [];
-    const msgs = document.getElementById('chat-msgs');
-    if (msgs) msgs.innerHTML = '';
-    await loadChatSessions();
-    renderChatSidebar();
-    const input = document.getElementById('chat-input');
-    if (input) input.focus();
-  } catch (e) {
-    showToast('Failed to create chat session', 'error');
+  const isFastH3 = currentVideoModel === 'fasth3';
+  if (btn) btn.style.display = isFastH3 ? '' : 'none';
+  if (!isFastH3) {
+    const ov = document.getElementById('bb-help-overlay');
+    if (ov) ov.remove();
   }
+  updateAutoPromptUI();
 }
 
-async function deleteChatSession(sessionId) {
-  try {
-    await apiPost(`/chat/sessions/${sessionId}/delete`, {});
-    if (currentSessionId === sessionId) {
-      currentSessionId = null;
-      chatMessages = [];
-      const msgs = document.getElementById('chat-msgs');
-      if (msgs) msgs.innerHTML = '';
-    }
-    await loadChatSessions();
-    renderChatSidebar();
-  } catch (e) {
-    showToast('Failed to delete session', 'error');
-  }
-}
-
-async function saveCurrentMessages() {
-  if (!currentSessionId || !chatMessages.length) return;
-  try {
-    await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: chatMessages.slice(-2) });
-  } catch (e) {}
-}
-
-async function autoTitleSession(sessionId) {
-  try {
-    await apiPost(`/chat/sessions/${sessionId}/auto-title`, {});
-    await loadChatSessions();
-    renderChatSidebar();
-  } catch (e) {}
-}
-
-async function openChat() {
-  currentSessionId = null;
-  try { const s = await apiGet('/settings'); _windowStates = s.window_states || {}; } catch (e) {}
-  const ollamaStatus = isOllamaConnected
-    ? '<span style="color:#22c55e"><i class="fa-solid fa-circle"></i> Online</span>'
-    : '<span style="color:#ef4444"><i class="fa-solid fa-circle"></i> Offline</span>';
-  await loadChatSessions();
-  const content = `
-    <div class="chat-layout">
-      <div class="chat-sidebar">
-        <div class="chat-sidebar-header">
-          <button id="chat-new-btn"><i class="fa-solid fa-plus"></i> New</button>
-        </div>
-        <div class="chat-sidebar-list" id="chat-sidebar-list"></div>
+function showPromptHelp() {
+  const existing = document.getElementById('bb-help-overlay');
+  if (existing) { existing.remove(); return; }
+  const ov = document.createElement('div');
+  ov.id = 'bb-help-overlay';
+  ov.className = 'bb-help-overlay';
+  ov.innerHTML = `
+    <div class="bb-help-modal">
+      <div class="bb-help-head">
+        <span><i class="fa-solid fa-circle-question"></i> How to write the prompt</span>
+        <button id="bb-help-close" title="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
-      <div class="chat-main">
-        <div id="chat-drag-overlay" class="drag-overlay">
-          <div class="drag-overlay-content">
-            <i class="fa-solid fa-cloud-upload-alt"></i>
-            <span>Drop your files here</span>
-            <small>Documents</small>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:flex-end;padding:2px 12px 0;font-size:10px;gap:4px;color:#888">${ollamaStatus}</div>
-        <div id="chat-msgs" class="chat-messages"></div>
-        <div class="chat-bar" id="chat-input-bar">
-          <button class="chat-plus" id="chat-plus"><i class="fa-solid fa-plus"></i></button>
-          <input type="text" id="chat-input" placeholder="Message..." />
-          <button id="chat-send"><i class="fa-solid fa-arrow-up"></i></button>
-        </div>
+      <div class="bb-help-body">
+        <p><b>Attachments are numbered in the order you add them:</b></p>
+        <ul>
+          <li>Images (up to 6) → <code>&lt;Picture 1&gt;</code> … <code>&lt;Picture 6&gt;</code></li>
+          <li>Audio (up to 3) → <code>&lt;Audio 1&gt;</code> … <code>&lt;Audio 3&gt;</code></li>
+        </ul>
+        <p><b>Each character (FastH3 multi-reference):</b></p>
+        <ul>
+          <li><code>&lt;Subject 1&gt;</code> comes from <code>&lt;Picture 1&gt;</code></li>
+          <li><code>&lt;Audio 1&gt;</code> is the voice for <code>&lt;Subject 1&gt; (S1)</code></li>
+          <li>…and so on for 2–6 (only 1–3 can have a voice reference).</li>
+        </ul>
+        <p><b>Dialogue</b> — write lines inline or on separate lines using <code>S1:</code> … <code>S6:</code>:</p>
+        <pre>S1: Hello there. S2: Hi, how are you?</pre>
+        <p>They are converted to <code>&lt;d&gt;[English] …&lt;/d&gt;</code> automatically.</p>
+        <p><b>Example prompt:</b></p>
+        <pre>A rainy café at night. S1: Hello there. S2: Hi, how are you?</pre>
+        <p class="bb-help-note">Tip: if your prompt already contains a <code>subject_definitions:</code> section, it is used verbatim.</p>
       </div>
-    </div>
-  `;
-  const wid = createWindow({ title: 'Chat', icon: 'fa-robot', width: 720, height: 560, content, stateKey: 'Chat' });
-  setTimeout(() => {
-    const input = document.getElementById('chat-input');
-    const send = document.getElementById('chat-send');
-    const plus = document.getElementById('chat-plus');
-    const msgs = document.getElementById('chat-msgs');
-    const bar = document.getElementById('chat-input-bar');
-    const dragOverlay = document.getElementById('chat-drag-overlay');
-    const newBtn = document.getElementById('chat-new-btn');
-
-    // Restore last session or first available
-    if (chatSessions.length > 0) {
-      chatMessages = [];
-      switchChatSession(chatSessions[0].id);
-    } else {
-      renderChatSidebar();
-    }
-
-    async function doChat() {
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
-      bar.classList.add('is-generating');
-
-      // Ensure we have a session
-      if (!currentSessionId) {
-        try {
-          const session = await apiPost('/chat/sessions', {});
-          currentSessionId = session.id;
-          await loadChatSessions();
-          renderChatSidebar();
-        } catch (e) {
-          bar.classList.remove('is-generating');
-          showToast('Failed to create session', 'error');
-          return;
-        }
-      }
-
-      const isFirstMsg = chatMessages.length === 0;
-      addMsg('user', text);
-      // Save user message immediately
-      try {
-        await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'user', content: text }] });
-      } catch (e) {}
-
-      const placeholder = document.createElement('div');
-      placeholder.className = 'chat-msg assistant';
-      placeholder.innerHTML = '<div class="spinner" style="width:16px;height:16px;margin:4px 0"></div>';
-      msgs.appendChild(placeholder);
-      msgs.scrollTop = msgs.scrollHeight;
-
-      try {
-        const res = await apiPost('/chat', { prompt: text, history: chatMessages });
-        placeholder.remove();
-        const reply = res.response || 'No response';
-        addMsg('assistant', reply);
-        // Save assistant message
-        try {
-          await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'assistant', content: reply }] });
-        } catch (e) {}
-        // Auto-title on first exchange
-        if (isFirstMsg) {
-          autoTitleSession(currentSessionId);
-        }
-      } catch (e) {
-        placeholder.remove();
-        const errMsg = 'Error: ' + e.message;
-        addMsg('assistant', errMsg);
-        try {
-          await apiPost(`/chat/sessions/${currentSessionId}/messages`, { messages: [{ role: 'assistant', content: errMsg }] });
-        } catch (e2) {}
-      } finally {
-        bar.classList.remove('is-generating');
-      }
-    }
-
-    // New Chat
-    newBtn.addEventListener('click', newChatSession);
-
-    // Upload via + button
-    plus.addEventListener('click', showChatUpload);
-
-    // Send
-    send.addEventListener('click', doChat);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doChat(); });
-
-    // Drag and drop
-    let dragCounter = 0;
-    const winEl = document.getElementById(wid);
-    const bodyEl = winEl.querySelector('.window-body');
-
-    bodyEl.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter++;
-      if (dragCounter === 1) dragOverlay.classList.add('show');
-    });
-
-    bodyEl.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-
-    bodyEl.addEventListener('dragleave', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter--;
-      if (dragCounter <= 0) { dragCounter = 0; dragOverlay.classList.remove('show'); }
-    });
-
-    bodyEl.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter = 0;
-      dragOverlay.classList.remove('show');
-      const files = e.dataTransfer.files;
-      if (files.length === 0) return;
-      const file = files[0];
-      try {
-        await sendFileToChat(file);
-      } catch (e) {
-        showToast('Upload failed: ' + e.message, 'error');
-      }
-    });
-  }, 50);
+    </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.getElementById('bb-help-close').onclick = () => ov.remove();
 }
 
 // ============================================================
@@ -2905,13 +2915,77 @@ async function loadComfyStatus(wid) {
 // Bottom bar state
 // ============================================================
 let bbMode = 'image';
+let currentSpeechEngine = 'qwen3';
+let speechEngines = [];
+let speechWizardWinId = null;
 let bbRes = '720p';
 let bbAr = '3:2';
 let bbDuration = 6;
+let bbUpscale = false;
 let bbEnhancer = 'none';
 let bbEnhancersList = [];
 let autoPlayEnabled = false;
+let previewMuted = true;
+let previewVolume = 1;
 let _bbAttachments = []; // {type:'lora'|'image'|'audio', name, src?, aspect?, id?}
+let bbTabs = [];
+let activeTabId = null;
+let bbTabCounter = 0;
+let h3WizardWinId = null;
+
+function defaultSpeechConfig() {
+  return { engine: (currentSpeechEngine || 'qwen3'), language: 'English', emotion: 'neutral', instruction: '', seed: 0, ref_text: '' };
+}
+
+function getSpeechConfig() {
+  const tab = getActiveBbTab();
+  if (!tab) return defaultSpeechConfig();
+  if (!tab.speech) tab.speech = defaultSpeechConfig();
+  if (!tab.speech.engine) tab.speech.engine = (currentSpeechEngine || 'qwen3');
+  return tab.speech;
+}
+
+async function loadTtsEngines() {
+  try {
+    const r = await apiGet('/tts/engines');
+    speechEngines = r.engines || [];
+    const validCurrent = currentSpeechEngine && speechEngines.some(e => e.id === currentSpeechEngine);
+    if (!validCurrent) {
+      const firstInstalled = speechEngines.find(e => e.installed !== false);
+      const chosen = firstInstalled || speechEngines[0];
+      if (chosen) currentSpeechEngine = chosen.id || 'qwen3';
+    }
+  } catch (_) {
+    speechEngines = [{ id:'qwen3', label:'Qwen3-TTS', default_language:'English', languages:['English','Chinese','Japanese','Korean','German','French','Russian','Portuguese','Spanish','Italian'], controls:{emotion:false,whisper:false,instruction:false,ref_text:true,seed:true,speed:false} }];
+  }
+}
+
+const H3_PROMPT_PRESETS = [
+  { id: 'none', name: 'None', scene: '', hasSpeech: false },
+  { id: 'selfie', name: 'Selfie — talking to camera', scene: 'A selfie-style close-up: the subject holds the camera at arm\'s length and talks directly to the lens. Natural lighting, shallow depth of field.', hasSpeech: true },
+  { id: 'selfie_walking', name: 'Selfie — walking', scene: 'A selfie-style walking shot: the subject holds the camera at arm\'s length while walking forward and talking to the lens. Slight handheld motion.', hasSpeech: true },
+  { id: 'selfie_car', name: 'Selfie — in a car', scene: 'A selfie-style shot inside a car: the subject sits in the driver\'s seat, holds the camera at arm\'s length, and talks to the lens. Daylight through the windows.', hasSpeech: true },
+  { id: 'selfie_outdoor', name: 'Selfie — outdoors', scene: 'A selfie-style outdoor shot: the subject holds the camera at arm\'s length, talking to the lens, with a natural landscape behind.', hasSpeech: true },
+  { id: 'selfie_night', name: 'Selfie — night', scene: 'A selfie-style night shot: the subject holds the camera at arm\'s length, talking to the lens, with city lights bokeh behind.', hasSpeech: true },
+  { id: 'selfie_group', name: 'Group selfie', scene: 'A group selfie: several subjects crowd the frame, talking to the camera, handheld.', hasSpeech: true },
+  { id: 'performance', name: 'Music performance', scene: 'A cinematic music-video performance: the subject performs to camera in a dramatic setting.', hasSpeech: false },
+  { id: 'portrait', name: 'Cinematic portrait', scene: 'A cinematic portrait: the subject looks at the camera, shallow depth of field, dramatic lighting.', hasSpeech: false },
+  { id: 'product', name: 'Product showcase', scene: 'A clean product showcase: the subject presents the product to the camera in a well-lit studio.', hasSpeech: false },
+];
+
+let ltxWizardWinId = null;
+
+const LTX_PROMPT_PRESETS = [
+  { id: 'none', name: 'None', fields: {} },
+  { id: 'selfie', name: 'Selfie — talking to camera', fields: { shotType: 'selfie close-up', action: 'talks directly to the camera', camera: 'is handheld', lighting: 'natural light', style: 'cinematic', hasSpeech: true, audioType: 'speech' } },
+  { id: 'selfie_walking', name: 'Selfie — walking', fields: { shotType: 'selfie medium shot', action: 'walks forward while talking to the camera', camera: 'is handheld and tracking', lighting: 'natural light', style: 'cinematic', hasSpeech: true, audioType: 'speech' } },
+  { id: 'selfie_car', name: 'Selfie — in a car', fields: { shotType: 'selfie close-up', action: 'talks to the camera while driving', setting: 'inside a car', camera: 'is handheld', lighting: 'daylight through the windows', style: 'cinematic', hasSpeech: true, audioType: 'speech' } },
+  { id: 'cinematic_portrait', name: 'Cinematic portrait', fields: { shotType: 'close-up', action: 'looks toward the camera', camera: 'slowly dollies in', lighting: 'dramatic side light', style: 'cinematic film', hasSpeech: false } },
+  { id: 'performance', name: 'Music performance', fields: { shotType: 'medium shot', action: 'performs to the camera', camera: 'slowly orbits the subject', lighting: 'stage lights', style: 'music video', hasSpeech: false, audioType: 'music' } },
+  { id: 'product', name: 'Product showcase', fields: { shotType: 'close-up', action: 'presents the product to the camera', camera: 'slowly pans across the product', lighting: 'soft studio light', style: 'commercial', hasSpeech: false } },
+  { id: 'golden_hour', name: 'Golden hour', fields: { shotType: 'wide shot', action: 'stands in the scene', camera: 'is static', lighting: 'golden hour', style: 'cinematic' } },
+  { id: 'neon_night', name: 'Neon night', fields: { shotType: 'medium shot', action: 'walks through the scene', camera: 'is handheld', lighting: 'neon city lights', style: 'cinematic' } },
+];
 
 function populateEnhanceMenu() {
   const menu = document.getElementById('bb-enhance-menu');
@@ -2944,6 +3018,7 @@ function populateEnhanceMenu() {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.bb-ar-wrap')) document.querySelectorAll('.bb-ar-menu').forEach(m => m.classList.remove('show'));
   if (!e.target.closest('.bb-enhance-wrap')) document.querySelectorAll('.bb-enhance-menu').forEach(m => m.classList.remove('show'));
+  if (!e.target.closest('.bb-model-wrap')) document.querySelectorAll('.bb-model-menu').forEach(m => m.classList.remove('show'));
 });
 
 // ============================================================
@@ -2952,7 +3027,7 @@ document.addEventListener('click', (e) => {
 async function openImageGen() {
   const s = await apiGet('/settings');
   const genModel = s.image_model || 'schnell';
-  const qwenTurbo = s.qwen_turbo || false;
+  const qwenTurboOn = !!(s.qwen_turbo);
   const content = `
     <div id="img-gen-body">
       <div class="servers-panel" style="max-width:380px">
@@ -2961,11 +3036,14 @@ async function openImageGen() {
           <button class="img-model-btn ${genModel === 'schnell' ? 'active' : ''}" data-model="schnell"><i class="fa-solid fa-bolt"></i> Flux Schnell <span style="font-size:10px;opacity:0.6">(fast)</span></button>
           <button class="img-model-btn ${genModel === 'klein' ? 'active' : ''}" data-model="klein"><i class="fa-solid fa-microchip"></i> Flux 2 Klein</button>
           <button class="img-model-btn ${genModel === 'qwen' ? 'active' : ''}" data-model="qwen"><i class="fa-solid fa-magic"></i> Qwen 2.5 2512</button>
+          <button class="img-model-btn ${genModel === 'grok' ? 'active' : ''}" data-model="grok"><i class="fa-solid fa-cloud"></i> Grok Imagine <span style="font-size:10px;opacity:0.6">(cloud)</span></button>
+          <button class="img-model-btn ${genModel === 'grok-quality' ? 'active' : ''}" data-model="grok-quality"><i class="fa-solid fa-cloud"></i> Grok Imagine Quality <span style="font-size:10px;opacity:0.6">(cloud)</span></button>
         </div>
+        <div style="font-size:10px;color:#888;margin-top:8px;line-height:1.4">Grok models use <code>xai_api_key</code> from Admin → Settings Editor. 480p/720p→1k, 1080p→2k.</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:0 2px">
           <span style="font-size:10px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.4px">Qwen Turbo (4-step LoRA)</span>
           <label class="toggle-label">
-            <input type="checkbox" id="qwen-turbo-toggle" ${qwenTurbo ? 'checked' : ''}>
+            <input type="checkbox" id="qwen-turbo-toggle" ${qwenTurboOn ? 'checked' : ''}>
             <span class="toggle-track"></span>
           </label>
         </div>
@@ -2975,7 +3053,7 @@ async function openImageGen() {
       </div>
     </div>
   `;
-  const wid = createWindow({ title: 'Image Generation', icon: 'fa-wand-magic-sparkles', width: 420, height: 330, content, fixed: true });
+  const wid = createWindow({ title: 'Image Generation', icon: 'fa-wand-magic-sparkles', width: 420, height: 420, content, fixed: true });
   setTimeout(() => {
     const _wb = document.getElementById(wid);
     if (_wb) _wb.querySelector('.window-body').style.background = '#fff';
@@ -2994,6 +3072,10 @@ async function openImageGen() {
       };
       try {
         await apiPost('/settings', updates);
+        currentImageModel = active.dataset.model;
+        qwenTurbo = !!updates.qwen_turbo;
+        updatePromptModelBadge();
+        refreshOpenModelDialogs();
         showToast('Image model saved');
       } catch (e) { showToast('Failed: ' + e.message, 'error'); }
     };
@@ -3013,14 +3095,17 @@ async function openImageEdit() {
         <div style="display:flex;flex-direction:column;gap:6px">
           <button class="img-model-btn ${i2iModel === 'klein' ? 'active' : ''}" data-model="klein"><i class="fa-solid fa-microchip"></i> Flux 2 Klein <span style="font-size:10px;opacity:0.6">(default)</span></button>
           <button class="img-model-btn ${i2iModel === 'flux2' ? 'active' : ''}" data-model="flux2"><i class="fa-solid fa-image"></i> Flux 2</button>
+          <button class="img-model-btn ${i2iModel === 'grok' ? 'active' : ''}" data-model="grok"><i class="fa-solid fa-cloud"></i> Grok Imagine <span style="font-size:10px;opacity:0.6">(cloud)</span></button>
+          <button class="img-model-btn ${i2iModel === 'grok-quality' ? 'active' : ''}" data-model="grok-quality"><i class="fa-solid fa-cloud"></i> Grok Imagine Quality <span style="font-size:10px;opacity:0.6">(cloud)</span></button>
         </div>
+        <div style="font-size:10px;color:#888;margin-top:8px;line-height:1.4">Grok edit uses natural-language prompts + attached image(s). Dual-ref supported. Key: <code>xai_api_key</code> in Settings Editor.</div>
       </div>
       <div style="text-align:right;padding-top:12px;border-top:1px solid #e5e7eb;margin-top:12px">
         <button id="img-edit-save" class="server-save-btn">Save</button>
       </div>
     </div>
   `;
-  const wid = createWindow({ title: 'Image Edit', icon: 'fa-pen', width: 420, height: 260, content, fixed: true });
+  const wid = createWindow({ title: 'Image Edit', icon: 'fa-pen', width: 420, height: 340, content, fixed: true });
   setTimeout(() => {
     const _wb = document.getElementById(wid);
     if (_wb) _wb.querySelector('.window-body').style.background = '#fff';
@@ -3035,7 +3120,122 @@ async function openImageEdit() {
       if (!active) return;
       try {
         await apiPost('/settings', { i2i_model: active.dataset.model });
+        currentI2iModel = active.dataset.model;
+        updatePromptModelBadge();
+        refreshOpenModelDialogs();
         showToast('Edit model saved');
+      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    };
+  }, 50);
+}
+
+// ============================================================
+// APP: Video Generation Model
+// ============================================================
+async function openVideoGen() {
+  const s = await apiGet('/settings');
+  const vidModel = s.video_model || 'ltx';
+  const vidVer = (String(s.ltx_version) === '2.5') ? '2.5' : '2.3';
+  currentLtxVersion = vidVer;
+  const verDisabled = vidModel !== 'ltx';
+  const content = `
+    <div id="vid-gen-body">
+      <div class="servers-panel" style="max-width:380px">
+        <div class="servers-panel-header"><i class="fa-solid fa-film" style="color:#0ea5e9"></i> Video Generation Model</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button class="img-model-btn vid-model-btn ${vidModel === 'ltx' ? 'active' : ''}" data-model="ltx"><i class="fa-solid fa-microchip"></i> LTX Video <span style="font-size:10px;opacity:0.6">(Comfy · default)</span></button>
+          <button class="img-model-btn vid-model-btn ${vidModel === 'fasth3' ? 'active' : ''}" data-model="fasth3"><i class="fa-solid fa-bolt"></i> FastH3 <span style="font-size:10px;opacity:0.6">(MiniMax H3 · 8-step)</span></button>
+          <button class="img-model-btn vid-model-btn ${vidModel === 'grok' ? 'active' : ''}" data-model="grok"><i class="fa-solid fa-cloud"></i> Grok Imagine <span style="font-size:10px;opacity:0.6">(cloud)</span></button>
+        </div>
+        <div id="vid-ltx-version-wrap" style="margin-top:12px;${verDisabled ? 'opacity:0.45;pointer-events:none' : ''}">
+          <div style="font-size:10px;font-weight:600;color:#555;margin-bottom:6px">LTX Version</div>
+          <div style="display:flex;gap:6px">
+            <button class="img-model-btn vid-ver-btn ${vidVer === '2.3' ? 'active' : ''}" data-version="2.3" style="justify-content:center">LTX 2.3</button>
+            <button class="img-model-btn vid-ver-btn ${vidVer === '2.5' ? 'active' : ''}" data-version="2.5" style="justify-content:center">LTX 2.5</button>
+          </div>
+        </div>
+        <div id="vid-fasth3-mode-wrap" style="margin-top:12px;${vidModel !== 'fasth3' ? 'opacity:0.45;pointer-events:none' : ''}">
+          <div style="font-size:10px;font-weight:600;color:#555;margin-bottom:6px">FastH3 Image Mode</div>
+          <div style="display:flex;gap:6px">
+            <button class="img-model-btn vid-h3-mode-btn ${(s.fasth3_mode || 'reference') !== 'i2v' ? 'active' : ''}" data-mode="reference" style="justify-content:center">Reference (best identity)</button>
+            <button class="img-model-btn vid-h3-mode-btn ${s.fasth3_mode === 'i2v' ? 'active' : ''}" data-mode="i2v" style="justify-content:center">First frame (I2V)</button>
+          </div>
+          <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.4">Reference keeps the character image as a persistent reference (max fidelity). First frame animates it as the opening frame.</div>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:8px;line-height:1.4">
+          LTX and FastH3 (MiniMax H3) support text→video, image→video and image+audio→video.
+          Grok is cloud-only (max 15s, no audio refs). FastH3 max ~15s.
+          Key: <code>xai_api_key</code> in Settings Editor.
+        </div>
+      </div>
+      <div style="text-align:right;padding-top:12px;border-top:1px solid #e5e7eb;margin-top:12px">
+        <button id="vid-gen-save" class="server-save-btn">Save</button>
+      </div>
+    </div>
+  `;
+  const wid = createWindow({ title: 'Video Generation', icon: 'fa-film', width: 420, height: 520, content, fixed: true });
+  setTimeout(() => {
+    const _wb = document.getElementById(wid);
+    if (_wb) _wb.querySelector('.window-body').style.background = '#fff';
+
+    document.querySelectorAll(`#${wid} .vid-model-btn`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll(`#${wid} .vid-model-btn`).forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const wrap = document.getElementById('vid-ltx-version-wrap');
+        if (wrap) {
+          const isLtx = btn.dataset.model === 'ltx';
+          wrap.style.opacity = isLtx ? '' : '0.45';
+          wrap.style.pointerEvents = isLtx ? '' : 'none';
+        }
+        const h3Wrap = document.getElementById('vid-fasth3-mode-wrap');
+        if (h3Wrap) {
+          const isH3 = btn.dataset.model === 'fasth3';
+          h3Wrap.style.opacity = isH3 ? '' : '0.45';
+          h3Wrap.style.pointerEvents = isH3 ? '' : 'none';
+        }
+      });
+    });
+    document.querySelectorAll(`#${wid} .vid-ver-btn`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll(`#${wid} .vid-ver-btn`).forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+    document.querySelectorAll(`#${wid} .vid-h3-mode-btn`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll(`#${wid} .vid-h3-mode-btn`).forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    document.getElementById('vid-gen-save').onclick = async () => {
+      const activeModel = document.querySelector(`#${wid} .vid-model-btn.active`);
+      const activeVer = document.querySelector(`#${wid} .vid-ver-btn.active`);
+      if (!activeModel) return;
+      const model = activeModel.dataset.model;
+      const version = activeVer ? activeVer.dataset.version : (currentLtxVersion || '2.3');
+      const activeH3Mode = document.querySelector(`#${wid} .vid-h3-mode-btn.active`);
+      const h3Mode = activeH3Mode ? activeH3Mode.dataset.mode : (currentFastH3Mode || 'reference');
+      try {
+        await apiPost('/settings', { video_model: model, ltx_version: version, fasth3_mode: h3Mode });
+        currentVideoModel = model;
+        currentLtxVersion = version;
+        currentFastH3Mode = h3Mode;
+        updatePromptModelBadge();
+        updatePromptHelpVisibility();
+        refreshOpenModelDialogs();
+        // Grok cannot use audio attachments — strip if switching to Grok
+        if (currentVideoModel === 'grok') {
+          const before = _bbAttachments.length;
+          _bbAttachments = _bbAttachments.filter(a => a.type !== 'audio');
+          if (_bbAttachments.length !== before) renderAttachments();
+        }
+        showToast(currentVideoModel === 'grok'
+          ? 'Video model saved (Grok)'
+          : currentVideoModel === 'fasth3'
+            ? 'Video model saved (FastH3)'
+            : `Video model saved (LTX ${currentLtxVersion})`);
       } catch (e) { showToast('Failed: ' + e.message, 'error'); }
     };
   }, 50);
@@ -3106,7 +3306,8 @@ const REQUIRED_WORKFLOW_MODELS = {
     "ltx-2.3-22b-dev-fp8.safetensors",
     "flux2_dev_fp8mixed.safetensors",
     "flux1-schnell.safetensors",
-    "qwen_image_2512_fp8_e4m3fn.safetensors"
+    "qwen_image_2512_fp8_e4m3fn.safetensors",
+    "relayvsr_x2_lightx2v_int8_convrot.safetensors"
   ],
   loras: [
     "Flux_2-Turbo-LoRA_comfyui.safetensors",
@@ -3118,7 +3319,8 @@ const REQUIRED_WORKFLOW_MODELS = {
   vaes: [
     "full_encoder_small_decoder.safetensors",
     "ae.safetensors",
-    "qwen_image_vae.safetensors"
+    "qwen_image_vae.safetensors",
+    "relayvsr_flash_vae_x2_fp32.safetensors"
   ],
   clips: [
     "mistral_3_small_flux2_bf16.safetensors",
@@ -3129,9 +3331,68 @@ const REQUIRED_WORKFLOW_MODELS = {
     "gemma_3_12B_it_fp4_mixed.safetensors"
   ],
   upscalers: [
-    "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
   ]
 };
+
+function relayVsrCapabilityLabel(cap) {
+  if (!cap) return 'Unavailable';
+  if (typeof cap === 'string') {
+    const s = cap.toLowerCase();
+    if (s === 'ready' || s === 'available') return 'Ready';
+    if (s.includes('node')) return 'Missing nodes';
+    if (s.includes('weight') || s.includes('model')) return 'Missing weights';
+    return 'Unavailable';
+  }
+  const statusRaw = String(cap.status || cap.state || '').toLowerCase();
+  if (statusRaw === 'ready' || statusRaw === 'available') return 'Ready';
+  if (statusRaw.includes('node')) return 'Missing nodes';
+  if (statusRaw.includes('weight') || statusRaw.includes('model')) return 'Missing weights';
+  if (statusRaw === 'unavailable' || statusRaw === 'disabled' || statusRaw === 'off') return 'Unavailable';
+  const missing = cap.missing || {};
+  const missingNodes = cap.missing_nodes || cap.missingNodes || missing.nodes || [];
+  const missingModels = cap.missing_models || cap.missingModels || cap.missing_weights || cap.missingWeights || missing.models || missing.weights || [];
+  if (Array.isArray(missingNodes) && missingNodes.length) return 'Missing nodes (' + missingNodes.join(', ') + ')';
+  if (Array.isArray(missingModels) && missingModels.length) return 'Missing weights (' + missingModels.join(', ') + ')';
+  const nodes = cap.nodes || cap.node_status || cap.nodeStatus;
+  if (nodes && typeof nodes === 'object' && Object.values(nodes).some(v => v === false || (v && v.available === false))) return 'Missing nodes';
+  const models = cap.models || cap.model_status || cap.modelStatus || cap.weights;
+  if (models && typeof models === 'object' && Object.values(models).some(v => v === false || (v && v.available === false))) return 'Missing weights';
+  if (cap.available === true || cap.ready === true || cap.supported === true || cap.ok === true) return 'Ready';
+  if (cap.available === false || cap.ready === false || cap.supported === false || cap.ok === false) {
+    if (cap.nodes_ok === false) return 'Missing nodes';
+    if (cap.models_ok === false) return 'Missing weights';
+    return 'Unavailable';
+  }
+  const nodesObj = nodes && typeof nodes === 'object';
+  const modelsObj = models && typeof models === 'object';
+  if (nodesObj && modelsObj) {
+    const nodeVals = Object.values(nodes);
+    const modelVals = Object.values(models);
+    const allPresent = [...nodeVals, ...modelVals].every(v => v === true || (v && v.available !== false));
+    if (allPresent) return 'Ready';
+    return nodeVals.some(v => v === false) ? 'Missing nodes' : 'Missing weights';
+  }
+  return 'Unavailable';
+}
+
+async function loadWorkflowCapabilities() {
+  const el = document.getElementById('wf-models-capabilities');
+  if (!el) return;
+  el.innerHTML = 'RelayVSR: <span style="color:#888">checking…</span>';
+  try {
+    const r = await fetch('/comfy/capabilities');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const cap = data.relayvsr || data.relayVsr || data.video_upscale || data.videoUpscale || data.upscale || data;
+    const label = relayVsrCapabilityLabel(cap);
+    const color = label === 'Ready' ? '#22c55e' : (label === 'Unavailable' ? '#ef4444' : '#f59e0b');
+    el.innerHTML = 'RelayVSR: <span style="color:' + color + '">' + escHtml(label) + '</span>';
+  } catch (_) {
+    el.innerHTML = 'RelayVSR: <span style="color:#ef4444">Unavailable</span>';
+  }
+}
 
 async function openWorkflowModels() {
   const content = `
@@ -3141,6 +3402,8 @@ async function openWorkflowModels() {
         <button id="wf-models-check" class="server-refresh-btn" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:5px;background:#fff;font-size:11px;color:#444;cursor:pointer"><i class="fa-solid fa-sync"></i> Check Models</button>
       </div>
       <div id="wf-models-summary" style="font-size:11px;color:#555;margin-bottom:6px">Click Check to scan ComfyUI</div>
+      <div id="wf-models-current" style="font-size:11px;color:#555;margin-bottom:6px"></div>
+      <div id="wf-models-capabilities" style="font-size:11px;color:#555;margin-bottom:6px">RelayVSR: <span style="color:#888">checking…</span></div>
       <div id="wf-models-list" style="font-size:11px;background:#f2f2f5;border:1px solid #e0e0e6;border-radius:6px;padding:8px;max-height:320px;overflow:auto"></div>
     </div>
   `;
@@ -3151,6 +3414,8 @@ async function openWorkflowModels() {
     const checkBtn = document.getElementById('wf-models-check');
     const summary = document.getElementById('wf-models-summary');
     const list = document.getElementById('wf-models-list');
+    updateWorkflowModelsCurrent();
+    loadWorkflowCapabilities();
     if (!checkBtn) return;
     checkBtn.onclick = async () => {
       const orig = checkBtn.innerHTML;
@@ -3193,6 +3458,46 @@ async function openWorkflowModels() {
           });
         });
         if (summary) summary.textContent = present + ' of ' + total + ' models present on server';
+        try {
+          const ttsRes = await fetch('/tts/engines');
+          const ttsData = await ttsRes.json();
+          const engines = Array.isArray(ttsData.engines) ? ttsData.engines : [];
+          const ttsHdr = document.createElement('div');
+          ttsHdr.style.cssText = 'font-size:10px;font-weight:600;color:#444;margin-top:12px';
+          ttsHdr.textContent = 'TTS Engines';
+          list.appendChild(ttsHdr);
+          if (!engines.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'color:#888;padding:4px';
+            empty.textContent = 'No TTS engines reported';
+            list.appendChild(empty);
+          }
+          engines.forEach(e => {
+            const installed = e.installed !== false;
+            const controls = e.controls || {};
+            const ctrlLabels = [];
+            if (controls.emotion) ctrlLabels.push('Emotion');
+            if (controls.whisper) ctrlLabels.push('Whisper');
+            if (controls.instruction) ctrlLabels.push('Instruction');
+            if (controls.ref_text) ctrlLabels.push('Ref transcript');
+            if (controls.seed) ctrlLabels.push('Seed');
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:4px;border-top:1px solid #e5e5ea';
+            row.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center">'
+              + '<span style="color:#333;font-weight:600">' + escHtml(e.label || e.id || '') + '</span>'
+              + '<span style="font-size:10px;white-space:nowrap;margin-left:8px;color:' + (installed ? '#22c55e' : '#ef4444') + '">'
+              + (installed ? '<i class="fa-solid fa-circle-check" style="color:#22c55e"></i> Installed' : '<i class="fa-solid fa-circle-xmark" style="color:#ef4444"></i> Not installed')
+              + '</span></div>'
+              + '<div style="font-size:10px;color:#666;margin-top:2px">Node pack: ' + escHtml(e.node_pack || '—') + ' | Model: ' + escHtml(e.model || '—') + '</div>'
+              + (ctrlLabels.length ? '<div style="font-size:10px;color:#666;margin-top:2px">Controls: ' + ctrlLabels.join(', ') + '</div>' : '');
+            list.appendChild(row);
+          });
+        } catch (_) {
+          const err = document.createElement('div');
+          err.style.cssText = 'color:#ef4444;margin-top:8px';
+          err.textContent = 'Could not read TTS engines';
+          list.appendChild(err);
+        }
       } catch (e) {
         if (summary) summary.textContent = 'Check failed';
         list.innerHTML = '<div style="color:#ef4444">Failed to query ComfyUI</div>';
@@ -3318,10 +3623,7 @@ async function init() {
   // Bottom bar mode buttons
   document.querySelectorAll('.bb-mode').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.bb-mode').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      bbMode = btn.dataset.mode;
-      document.getElementById('bb-duration-group').style.display = bbMode === 'video' ? 'flex' : 'none';
+      setBottomBarMode(btn.dataset.mode);
     });
   });
 
@@ -3340,7 +3642,7 @@ async function init() {
   if (arBtn && arMenu) {
     arBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      document.querySelectorAll('.bb-enhance-menu').forEach(m => m.classList.remove('show'));
+      document.querySelectorAll('.bb-enhance-menu, .bb-model-menu').forEach(m => m.classList.remove('show'));
       arMenu.classList.toggle('show');
     });
     arMenu.querySelectorAll('.bb-ar-option').forEach(opt => {
@@ -3369,6 +3671,14 @@ async function init() {
     const s = await apiGet('/settings');
     bbEnhancersList = Array.isArray(s.prompt_enhancers) ? s.prompt_enhancers : [];
     currentImageModel = s.image_model || 'schnell';
+    currentI2iModel = s.i2i_model || 'klein';
+      currentVideoModel = s.video_model || 'ltx';
+      currentLtxVersion = String(s.ltx_version) === '2.5' ? '2.5' : '2.3';
+      currentFastH3Mode = s.fasth3_mode === 'i2v' ? 'i2v' : 'reference';
+      if (typeof s.tts_engine === 'string') currentSpeechEngine = s.tts_engine || currentSpeechEngine || 'qwen3';
+      setBottomBarUpscale(s.video_upscale === 'relayvsr_x2');
+      updatePromptModelBadge();
+      updatePromptHelpVisibility();
     qwenTurbo = s.qwen_turbo || false;
     // Theme
     if (s.theme) {
@@ -3379,6 +3689,7 @@ async function init() {
       customTheme = s.customTheme;
     }
   } catch (e) { bbEnhancersList = []; }
+  loadTtsEngines();
   populateThemeSubmenu();
   // Load available LoRAs for story mode character editor
   try {
@@ -3393,7 +3704,7 @@ async function init() {
   if (enhanceBtn && enhanceMenu) {
     enhanceBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      document.querySelectorAll('.bb-ar-menu').forEach(m => m.classList.remove('show'));
+      document.querySelectorAll('.bb-ar-menu, .bb-model-menu').forEach(m => m.classList.remove('show'));
       populateEnhanceMenu();
       enhanceMenu.classList.toggle('show');
     });
@@ -3418,6 +3729,7 @@ async function init() {
       const action = item.dataset.action;
       if (action === 'image-gen') openImageGen();
       else if (action === 'image-edit') openImageEdit();
+      else if (action === 'video-gen') openVideoGen();
       else if (action === 'loras') openLoras();
       else if (action === 'workflow-models') openWorkflowModels();
     });
@@ -3448,8 +3760,6 @@ async function init() {
       else if (action === 'library-editor') openLibraryEditor();
 
       else if (action === 'generate-thumbnails') generateAllThumbnails();
-      else if (action === 'chat-history-editor') openChatHistoryEditor();
-      else if (action === 'director-data-editor') openDirectorDataEditor();
     });
   });
   // Attachments bar (sibling above bottom-bar)
@@ -3463,14 +3773,26 @@ async function init() {
   document.querySelector('.bb-plus').addEventListener('click', showLoraPicker);
 
   function canAddAttachment(type) {
+    if (bbMode === 'speech') return type === 'voice' && !_bbAttachments.some(a => a.type === 'voice');
     const hasLoRA = _bbAttachments.some(a => a.type === 'lora');
-    const hasImage = _bbAttachments.some(a => a.type === 'image');
-    const hasAudio = _bbAttachments.some(a => a.type === 'audio');
     const imgCount = _bbAttachments.filter(a => a.type === 'image').length;
+    const audioCount = _bbAttachments.filter(a => a.type === 'audio').length;
+    const isFastH3Video = bbMode === 'video' && currentVideoModel === 'fasth3';
 
     if (type === 'lora') return !_bbAttachments.length;
-    if (type === 'image') return !hasLoRA && !hasAudio && imgCount < 2;
-    if (type === 'audio') return !hasLoRA && !hasAudio;
+    if (type === 'image') {
+      if (hasLoRA) return false;
+      // FastH3 supports up to 6 reference images + 3 audios together
+      if (isFastH3Video) return imgCount < 6;
+      const hasAudio = audioCount > 0;
+      return !hasAudio && imgCount < 2;
+    }
+    if (type === 'audio') {
+      if (hasLoRA) return false;
+      if (currentVideoModel === 'grok') return false;
+      if (isFastH3Video) return audioCount < 3;
+      return audioCount === 0;
+    }
     return false;
   }
 
@@ -3484,22 +3806,2093 @@ async function init() {
     try {
       const data = JSON.parse(raw);
       if (!data || !data.type) return;
-      if (!canAddAttachment(data.type)) { showToast('Cannot add — incompatible combination'); return; }
+      let type = data.type;
+      if (bbMode === 'speech') {
+        if (!data.voice) { showToast('Mark this audio as a Voice first (mic icon in the Library)', 'error'); return; }
+        type = 'voice';
+      }
+      if (!canAddAttachment(type)) { showToast('Cannot add — incompatible combination'); return; }
+      if (type === 'voice') {
+        const tab = getActiveBbTab();
+        if (tab) {
+          if (!tab.speech) tab.speech = defaultSpeechConfig();
+          const va = (allAssets || []).find(x => String(x.id) === String(data.id));
+          tab.speech.ref_text = (va && va.metadata && va.metadata.voice && va.metadata.voice.transcript) || '';
+        }
+      }
       const asp = data.aspect && isFinite(data.aspect) ? data.aspect : 1.5;
-      _bbAttachments.push({ type: data.type, name: data.name, src: data.src, aspect: asp, id: data.id, prompt: data.prompt || '' });
+      _bbAttachments.push({ type, name: data.name, src: data.src, aspect: asp, id: data.id, prompt: data.prompt || '' });
       renderAttachments();
     } catch (e) { showToast('Drop error: ' + e.message, 'error'); }
   });
 
   // Bottom bar send
   document.getElementById('bb-send').addEventListener('click', bbSend);
+  document.getElementById('bb-upscale-btn')?.addEventListener('click', () => setBottomBarUpscale(!bbUpscale));
   document.getElementById('bb-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') bbSend();
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); bbSend(); }
   });
+  document.getElementById('bb-input').addEventListener('input', autoResizeBbInput);
+
+  const promptHelpBtn = document.getElementById('bb-prompt-help');
+  if (promptHelpBtn) promptHelpBtn.addEventListener('click', showPromptHelp);
+
+  const modelBadgeBtn = document.getElementById('bb-model-badge');
+  if (modelBadgeBtn) modelBadgeBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (bbMode === 'speech') {
+      document.querySelectorAll('.bb-ar-menu, .bb-enhance-menu').forEach(m => m.classList.remove('show'));
+      renderModelMenu();
+      document.getElementById('bb-model-menu')?.classList.toggle('show');
+      return;
+    }
+    document.querySelectorAll('.bb-ar-menu, .bb-enhance-menu').forEach(m => m.classList.remove('show'));
+    renderModelMenu();
+    document.getElementById('bb-model-menu')?.classList.toggle('show');
+  };
+
+  const speechSetupBtn = document.getElementById('bb-speech-setup');
+  if (speechSetupBtn) speechSetupBtn.onclick = () => openSpeechSetup();
+
+  const autoPromptCb = document.getElementById('bb-auto-prompt-enabled');
+  if (autoPromptCb) autoPromptCb.onchange = () => {
+    const tab = getActiveBbTab();
+    if (!tab) return;
+    if (currentVideoModel === 'ltx') {
+      if (autoPromptCb.checked) {
+        if (!tab.ltx) initLtxStateFromAttachments(tab);
+        applyLtxPrompt(tab);
+      } else if (tab.ltx) {
+        tab.ltx.enabled = false;
+      }
+    } else {
+      if (autoPromptCb.checked) {
+        if (!tab.h3) initH3StateFromAttachments(tab);
+        applyH3Prompt(tab);
+      } else if (tab.h3) {
+        tab.h3.enabled = false;
+      }
+    }
+    updateAutoPromptUI();
+  };
+  const autoPromptSetup = document.getElementById('bb-auto-prompt-setup');
+  if (autoPromptSetup) autoPromptSetup.onclick = () => {
+    if (currentVideoModel === 'ltx') openLtxWizard();
+    else openH3Wizard();
+  };
+
+  initBbTabs();
+  autoResizeBbInput();
+  requestAnimationFrame(() => { autoResizeBbInput(); updateAttachmentsBarPosition(); });
+  window.addEventListener('resize', () => { autoResizeBbInput(); updateAttachmentsBarPosition(); });
 
   loadAutoPlayState();
 
   console.log('Pulse Image Desktop initialized' + (isTauri ? ' [Tauri]' : ' [Browser]'));
+}
+
+// ============================================================
+// Gen settings persist / To Prompt helpers
+// ============================================================
+function buildGenMetadata(job) {
+  const meta = {
+    mode: job.mode,
+    resolution: job.resolution,
+    aspect_ratio: job.aspect_ratio,
+    duration: job.mode === 'video' ? job.duration : null,
+    enhancer_id: job.enhancer_id || 'none',
+    original_prompt: job.original_prompt ?? job.prompt,
+    image_model: job.image_model,
+    i2i_model: job.i2i_model,
+    video_model: job.video_model,
+    ltx_version: job.ltx_version,
+    attachments: {
+      images: (job.attImages || []).map(a => ({ id: a.id || '', name: a.name, type: 'image' })),
+      audio: job.attAudio ? { id: job.attAudio.id || '', name: job.attAudio.name, type: 'audio' } : null,
+      lora: job.attLora ? { name: job.attLora.name, type: 'lora' } : null,
+    },
+  };
+  if (job.mode === 'video') {
+    meta.fasth3_mode = job.fasth3_mode || 'reference';
+    meta.video_upscale = job.video_upscale || 'off';
+    if (job.upscale) meta.upscale = JSON.parse(JSON.stringify(job.upscale));
+    meta.attachments.audios = (job.attAudios || []).map(a => ({ id: a.id || '', name: a.name, type: 'audio' }));
+    if (job.h3) meta.h3 = JSON.parse(JSON.stringify(job.h3));
+    if (job.ltx) meta.ltx = JSON.parse(JSON.stringify(job.ltx));
+  }
+  return meta;
+}
+
+function currentVideoModelLabel() {
+  if (currentVideoModel === 'fasth3') {
+    return 'FastH3 (' + (currentFastH3Mode === 'i2v' ? 'First frame' : 'Reference') + ')';
+  }
+  if (currentVideoModel === 'grok') return 'Grok Imagine';
+  return 'LTX ' + (currentLtxVersion || '2.3');
+}
+
+function currentModelSummary() {
+  const imageLabels = {
+    schnell: 'Flux Schnell',
+    klein: 'Flux 2 Klein',
+    qwen: 'Qwen 2.5 2512',
+    grok: 'Grok Imagine',
+    'grok-quality': 'Grok Imagine Quality',
+  };
+  const i2iLabels = {
+    klein: 'Flux 2 Klein',
+    flux2: 'Flux 2',
+    grok: 'Grok Imagine',
+    'grok-quality': 'Grok Imagine Quality',
+  };
+  const image = imageLabels[currentImageModel] || currentImageModel || 'Flux Schnell';
+  const edit = i2iLabels[currentI2iModel] || currentI2iModel || 'Flux 2 Klein';
+  return currentVideoModelLabel() + ' · ' + image + ' · Edit: ' + edit;
+}
+
+function refreshOpenModelDialogs() {
+  const setActive = (rootSel, btnSel, attr, val) => {
+    const root = document.querySelector(rootSel);
+    if (!root) return;
+    root.querySelectorAll(btnSel).forEach(b => b.classList.toggle('active', b.dataset[attr] === val));
+  };
+  setActive('#img-gen-body', '.img-model-btn', 'model', currentImageModel);
+  setActive('#img-edit-body', '.img-model-btn', 'model', currentI2iModel);
+  updateWorkflowModelsCurrent();
+
+  const vidBody = document.getElementById('vid-gen-body');
+  if (!vidBody) return;
+  vidBody.querySelectorAll('.vid-model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === currentVideoModel));
+  vidBody.querySelectorAll('.vid-ver-btn').forEach(b => b.classList.toggle('active', b.dataset.version === (currentLtxVersion || '2.3')));
+  vidBody.querySelectorAll('.vid-h3-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === (currentFastH3Mode || 'reference')));
+  const ltxWrap = document.getElementById('vid-ltx-version-wrap');
+  if (ltxWrap) {
+    const on = currentVideoModel === 'ltx';
+    ltxWrap.style.opacity = on ? '' : '0.45';
+    ltxWrap.style.pointerEvents = on ? '' : 'none';
+  }
+  const h3Wrap = document.getElementById('vid-fasth3-mode-wrap');
+  if (h3Wrap) {
+    const on = currentVideoModel === 'fasth3';
+    h3Wrap.style.opacity = on ? '' : '0.45';
+    h3Wrap.style.pointerEvents = on ? '' : 'none';
+  }
+}
+
+function updateWorkflowModelsCurrent() {
+  const el = document.getElementById('wf-models-current');
+  if (!el) return;
+  el.textContent = 'Current: ' + currentModelSummary();
+}
+
+function updatePromptModelBadge() {
+  const el = document.getElementById('bb-model-badge');
+  if (!el) return;
+  if (bbMode === 'speech') {
+    const sp = getSpeechConfig();
+    const eng = speechEngines.find(e => e.id === sp.engine) || speechEngines.find(e => e.id === currentSpeechEngine);
+    let label = eng ? eng.label : (currentSpeechEngine || 'Qwen3-TTS');
+    if (eng && eng.installed === false) label += ' (not installed)';
+    const voice = _bbAttachments.find(a => a.type === 'voice');
+    if (voice) {
+      const voiceLabel = voice.prompt || voice.name || 'Voice';
+      label += ' · ' + (voiceLabel.length > 24 ? voiceLabel.slice(0, 24) + '…' : voiceLabel);
+    }
+    el.innerHTML = escHtml(label);
+    el.title = 'Speech engine — click to choose';
+    return;
+  }
+  const imageLabels = {
+    schnell: 'Flux Schnell',
+    klein: 'Flux 2 Klein',
+    qwen: 'Qwen 2.5 2512',
+    grok: 'Grok Imagine',
+    'grok-quality': 'Grok Imagine Quality',
+  };
+  const i2iLabels = {
+    klein: 'Flux 2 Klein',
+    flux2: 'Flux 2',
+    grok: 'Grok Imagine',
+    'grok-quality': 'Grok Imagine Quality',
+  };
+  let label = '';
+  if (bbMode === 'video') {
+    if (currentVideoModel === 'fasth3') {
+      label = 'FastH3 · ' + (currentFastH3Mode === 'i2v' ? 'First frame' : 'Reference');
+    } else if (currentVideoModel === 'grok') {
+      label = 'Grok Imagine';
+    } else {
+      label = 'LTX ' + (currentLtxVersion || '2.3');
+    }
+  } else {
+    const hasImage = _bbAttachments.some(a => a.type === 'image');
+    if (hasImage) {
+      label = i2iLabels[currentI2iModel] || currentI2iModel || 'Flux 2 Klein';
+    } else {
+      label = imageLabels[currentImageModel] || currentImageModel || 'Flux Schnell';
+      if (currentImageModel === 'qwen' && qwenTurbo) label += ' · Turbo';
+    }
+  }
+  el.innerHTML = `${escHtml(label)} <i class="fa-solid fa-chevron-down" style="font-size:8px;margin-left:2px"></i>`;
+  el.title = bbMode === 'video' ? 'Current video model' : 'Current image model';
+}
+
+function getModelItems() {
+  if (bbMode === 'speech') {
+    if (!speechEngines.length) {
+      return [{
+        id: 'qwen3', label: 'Qwen3-TTS', active: getSpeechConfig().engine === 'qwen3',
+        settings: { tts_engine: 'qwen3' },
+        apply: () => {
+          currentSpeechEngine = 'qwen3';
+          const tab = getActiveBbTab();
+          if (tab) { tab.speech = tab.speech || defaultSpeechConfig(); tab.speech.engine = 'qwen3'; }
+          if (speechWizardWinId && windows[speechWizardWinId]) renderSpeechSetup();
+        },
+      }];
+    }
+    return speechEngines.map(e => ({
+      id: e.id,
+      label: e.label + (e.installed === false ? ' (not installed)' : ''),
+      active: e.id === getSpeechConfig().engine,
+      settings: { tts_engine: e.id },
+      apply: () => {
+        currentSpeechEngine = e.id;
+        const tab = getActiveBbTab();
+        if (tab) { tab.speech = tab.speech || defaultSpeechConfig(); tab.speech.engine = e.id; }
+        if (speechWizardWinId && windows[speechWizardWinId]) renderSpeechSetup();
+      },
+    }));
+  }
+  if (bbMode === 'video') {
+    const is25 = String(currentLtxVersion) === '2.5';
+    return [
+      { id: 'ltx23', label: 'LTX 2.3', active: currentVideoModel === 'ltx' && !is25, settings: { video_model: 'ltx', ltx_version: '2.3' }, apply: () => { currentVideoModel = 'ltx'; currentLtxVersion = '2.3'; } },
+      { id: 'ltx25', label: 'LTX 2.5', active: currentVideoModel === 'ltx' && is25, settings: { video_model: 'ltx', ltx_version: '2.5' }, apply: () => { currentVideoModel = 'ltx'; currentLtxVersion = '2.5'; } },
+      { id: 'fasth3', label: 'FastH3', active: currentVideoModel === 'fasth3', settings: { video_model: 'fasth3' }, apply: () => { currentVideoModel = 'fasth3'; } },
+      { id: 'grok', label: 'Grok Imagine', active: currentVideoModel === 'grok', settings: { video_model: 'grok' }, apply: () => { currentVideoModel = 'grok'; } },
+    ];
+  }
+  const hasImage = _bbAttachments.some(a => a.type === 'image');
+  if (hasImage) {
+    return [
+      { id: 'klein', label: 'Flux 2 Klein', active: currentI2iModel === 'klein', settings: { i2i_model: 'klein' }, apply: () => { currentI2iModel = 'klein'; } },
+      { id: 'flux2', label: 'Flux 2', active: currentI2iModel === 'flux2', settings: { i2i_model: 'flux2' }, apply: () => { currentI2iModel = 'flux2'; } },
+      { id: 'grok', label: 'Grok Imagine', active: currentI2iModel === 'grok', settings: { i2i_model: 'grok' }, apply: () => { currentI2iModel = 'grok'; } },
+      { id: 'grok-quality', label: 'Grok Imagine Quality', active: currentI2iModel === 'grok-quality', settings: { i2i_model: 'grok-quality' }, apply: () => { currentI2iModel = 'grok-quality'; } },
+    ];
+  }
+  return [
+    { id: 'schnell', label: 'Flux Schnell', active: currentImageModel === 'schnell', settings: { image_model: 'schnell' }, apply: () => { currentImageModel = 'schnell'; } },
+    { id: 'klein', label: 'Flux 2 Klein', active: currentImageModel === 'klein', settings: { image_model: 'klein' }, apply: () => { currentImageModel = 'klein'; } },
+    { id: 'qwen', label: 'Qwen 2.5 2512', active: currentImageModel === 'qwen', settings: { image_model: 'qwen' }, apply: () => { currentImageModel = 'qwen'; } },
+    { id: 'grok', label: 'Grok Imagine', active: currentImageModel === 'grok', settings: { image_model: 'grok' }, apply: () => { currentImageModel = 'grok'; } },
+    { id: 'grok-quality', label: 'Grok Imagine Quality', active: currentImageModel === 'grok-quality', settings: { image_model: 'grok-quality' }, apply: () => { currentImageModel = 'grok-quality'; } },
+  ];
+}
+
+function renderModelMenu() {
+  const menu = document.getElementById('bb-model-menu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  getModelItems().forEach(item => {
+    const d = document.createElement('div');
+    d.className = 'bb-model-option' + (item.active ? ' active' : '');
+    const label = document.createElement('span');
+    label.textContent = item.label;
+    d.appendChild(label);
+    if (item.active) {
+      const check = document.createElement('i');
+      check.className = 'fa-solid fa-check';
+      check.style.cssText = 'color:#007aff;font-size:10px';
+      d.appendChild(check);
+    }
+    d.onclick = async (e) => {
+      e.stopPropagation();
+      try {
+        await apiPost('/settings', item.settings);
+        item.apply();
+        if (currentVideoModel === 'grok') {
+          const before = _bbAttachments.length;
+          _bbAttachments = _bbAttachments.filter(a => a.type !== 'audio');
+          if (_bbAttachments.length !== before) renderAttachments();
+        }
+        updatePromptModelBadge();
+        updatePromptHelpVisibility();
+        refreshOpenModelDialogs();
+        renderModelMenu();
+        menu.classList.remove('show');
+        showToast('Model: ' + item.label);
+      } catch (err) {
+        showToast('Failed: ' + err.message, 'error');
+      }
+    };
+    menu.appendChild(d);
+  });
+}
+
+function updateBottomBarModeUI() {
+  const isSpeech = bbMode === 'speech';
+  const setDisp = (sel, on) => { const el = document.querySelector(sel); if (el) el.style.display = on ? '' : 'none'; };
+  setDisp('.bb-res-group', !isSpeech);
+  setDisp('.bb-ar-wrap', !isSpeech);
+  setDisp('#bb-duration-group', !isSpeech && bbMode === 'video');
+  setDisp('#bb-upscale-wrap', !isSpeech && bbMode === 'video');
+  setDisp('.bb-enhance-wrap', !isSpeech);
+  setDisp('#bb-prompt-help', !isSpeech);
+  setDisp('#bb-auto-prompt-wrap', !isSpeech);
+  setDisp('#bb-speech-wrap', isSpeech);
+  if (isSpeech) document.getElementById('bb-model-menu')?.classList.remove('show');
+  const plus = document.querySelector('.bb-plus'); if (plus) plus.style.display = isSpeech ? 'none' : '';
+  const input = document.getElementById('bb-input');
+  if (input) input.placeholder = isSpeech ? 'Type to speak' : (bbMode === 'video' ? 'Describe the video' : 'Type to image');
+  updatePromptModelBadge();
+  updateAutoPromptUI();
+}
+
+function setBottomBarMode(mode) {
+  bbMode = (mode === 'video' || mode === 'speech') ? mode : 'image';
+  const activeTab = bbTabs.find(t => t.id === activeTabId);
+  if (activeTab) activeTab.mode = bbMode;
+  document.querySelectorAll('.bb-mode').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === bbMode);
+  });
+  if (bbMode === 'speech') {
+    _bbAttachments = _bbAttachments.filter(a => a.type === 'voice');
+  } else {
+    _bbAttachments = _bbAttachments.filter(a => a.type !== 'voice');
+  }
+  renderAttachments();
+  updateBottomBarModeUI();
+}
+
+function setBottomBarRes(res) {
+  if (!res) return;
+  // Normalize e.g. "720" → "720p"
+  let r = String(res).trim().toLowerCase();
+  if (r === '480' || r === '720' || r === '1080') r = r + 'p';
+  if (!/^\d+p$/.test(r)) r = String(res).trim();
+  bbRes = r;
+  const root = document.getElementById('bottom-bar') || document;
+  root.querySelectorAll('.bb-pill[data-res]').forEach(b => {
+    b.classList.toggle('active', b.dataset.res === bbRes);
+  });
+}
+
+function setBottomBarAr(ar) {
+  if (!ar) return;
+  bbAr = ar;
+  const arMenu = document.getElementById('bb-ar-menu');
+  const arBtn = document.getElementById('bb-ar-btn');
+  if (arMenu) {
+    arMenu.querySelectorAll('.bb-ar-option').forEach(o => {
+      o.classList.toggle('active', o.dataset.ar === bbAr);
+    });
+  }
+  if (arBtn) {
+    const opt = arMenu ? arMenu.querySelector(`.bb-ar-option[data-ar="${bbAr}"]`) : null;
+    const iconHtml = opt && opt.querySelector('i')
+      ? opt.querySelector('i').outerHTML
+      : '<i class="fa-solid fa-image"></i>';
+    arBtn.innerHTML = `${iconHtml} ${bbAr} <i class="fa-solid fa-chevron-down" style="font-size:8px;margin-left:2px"></i>`;
+  }
+}
+
+function setBottomBarDuration(dur) {
+  if (dur == null) return;
+  bbDuration = parseInt(dur, 10) || 6;
+  document.querySelectorAll('.bb-duration-pill').forEach(b => {
+    b.classList.toggle('active', String(b.dataset.dur) === String(bbDuration));
+  });
+}
+
+function setBottomBarUpscale(on) {
+  bbUpscale = !!on;
+  const btn = document.getElementById('bb-upscale-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', bbUpscale);
+  btn.setAttribute('aria-pressed', bbUpscale ? 'true' : 'false');
+  btn.title = bbUpscale
+    ? 'RelayVSR 2× post-upscale: on'
+    : 'RelayVSR 2× post-upscale: off';
+}
+
+function setBottomBarEnhancer(id) {
+  bbEnhancer = id || 'none';
+  const enh = bbEnhancersList.find(e => e.id === bbEnhancer);
+  const label = bbEnhancer === 'none'
+    ? 'No enhancement'
+    : (enh ? (enh.name || enh.id) : bbEnhancer);
+  const textEl = document.getElementById('bb-enhance-text');
+  if (textEl) textEl.textContent = label;
+  populateEnhanceMenu();
+}
+
+function clearBottomBarAttachments() {
+  _bbAttachments = [];
+  renderAttachments();
+}
+
+// ============================================================
+// Prompt bar tabs
+// ============================================================
+function newBbTabId() {
+  return 'bbtab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+function snapshotActiveTab() {
+  const tab = bbTabs.find(t => t.id === activeTabId);
+  if (!tab) return;
+  const input = document.getElementById('bb-input');
+  tab.prompt = input ? input.value : tab.prompt;
+  tab.mode = bbMode;
+  tab.res = bbRes;
+  tab.ar = bbAr;
+  tab.duration = bbDuration;
+  tab.enhancer = bbEnhancer;
+  tab.upscale = bbUpscale;
+  tab.attachments = _bbAttachments.map(a => ({ ...a }));
+}
+
+function applyTabState(tab) {
+  if (!tab) return;
+  const input = document.getElementById('bb-input');
+  if (input) input.value = tab.prompt || '';
+  setBottomBarMode(tab.mode || 'image');
+  setBottomBarRes(tab.res || '720p');
+  setBottomBarAr(tab.ar || '3:2');
+  setBottomBarDuration(tab.duration || 6);
+  setBottomBarEnhancer(tab.enhancer || 'none');
+  setBottomBarUpscale(!!tab.upscale);
+  _bbAttachments = (tab.attachments || []).map(a => ({ ...a }));
+  tab.speech = tab.speech || defaultSpeechConfig();
+  renderAttachments();
+  updateAutoPromptUI();
+  if (h3WizardWinId && windows[h3WizardWinId]) renderH3Wizard();
+  if (ltxWizardWinId && windows[ltxWizardWinId]) renderLtxWizard();
+  if (speechWizardWinId && windows[speechWizardWinId]) renderSpeechSetup();
+  autoResizeBbInput();
+}
+
+function switchBbTab(id) {
+  if (id === activeTabId) return;
+  snapshotActiveTab();
+  const tab = bbTabs.find(t => t.id === id);
+  if (!tab) return;
+  activeTabId = id;
+  applyTabState(tab);
+  renderBbTabs();
+  document.getElementById('bb-input')?.focus();
+}
+
+function addBbTab() {
+  snapshotActiveTab();
+  const src = bbTabs.find(t => t.id === activeTabId);
+  const tab = {
+    id: newBbTabId(),
+    label: `Tab ${++bbTabCounter}`,
+    prompt: src ? src.prompt : '',
+    mode: src ? src.mode : bbMode,
+    res: src ? src.res : bbRes,
+    ar: src ? src.ar : bbAr,
+    duration: src ? src.duration : bbDuration,
+    enhancer: src ? src.enhancer : bbEnhancer,
+    upscale: src ? src.upscale : bbUpscale,
+    attachments: src ? src.attachments.map(a => ({ ...a })) : [],
+    h3: src && src.h3 ? JSON.parse(JSON.stringify(src.h3)) : null,
+    ltx: src && src.ltx ? JSON.parse(JSON.stringify(src.ltx)) : null,
+    speech: src && src.speech ? { ...src.speech } : null,
+  };
+  bbTabs.push(tab);
+  activeTabId = tab.id;
+  applyTabState(tab);
+  renderBbTabs();
+  document.getElementById('bb-input')?.focus();
+}
+
+function closeBbTab(id) {
+  if (bbTabs.length <= 1) return;
+  const idx = bbTabs.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  const wasActive = id === activeTabId;
+  bbTabs.splice(idx, 1);
+  if (wasActive) {
+    const next = bbTabs[Math.min(idx, bbTabs.length - 1)];
+    activeTabId = next.id;
+    applyTabState(next);
+  }
+  renderBbTabs();
+}
+
+function renderBbTabs() {
+  const bar = document.getElementById('bb-tabs');
+  if (!bar) return;
+  bar.innerHTML = '';
+  bbTabs.forEach(tab => {
+    const el = document.createElement('div');
+    el.className = 'bb-tab' + (tab.id === activeTabId ? ' active' : '');
+    const label = document.createElement('span');
+    label.className = 'bb-tab-label';
+    label.textContent = tab.label;
+    label.title = (tab.prompt || '').slice(0, 200);
+    el.appendChild(label);
+    if (bbTabs.length > 1) {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'bb-tab-close';
+      x.title = 'Close tab';
+      x.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      x.onclick = (e) => { e.stopPropagation(); closeBbTab(tab.id); };
+      el.appendChild(x);
+    }
+    el.onclick = () => switchBbTab(tab.id);
+    bar.appendChild(el);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'bb-tab-add';
+  add.title = 'New tab';
+  add.innerHTML = '<i class="fa-solid fa-plus"></i>';
+  add.onclick = () => addBbTab();
+  bar.appendChild(add);
+}
+
+function initBbTabs() {
+  bbTabCounter = 0;
+  const input = document.getElementById('bb-input');
+  const tab = {
+    id: newBbTabId(),
+    label: `Tab ${++bbTabCounter}`,
+    prompt: input ? input.value : '',
+    mode: bbMode,
+    res: bbRes,
+    ar: bbAr,
+    duration: bbDuration,
+    enhancer: bbEnhancer,
+    upscale: bbUpscale,
+    attachments: _bbAttachments.map(a => ({ ...a })),
+  };
+  bbTabs = [tab];
+  activeTabId = tab.id;
+  renderBbTabs();
+  updateAutoPromptUI();
+}
+
+// ============================================================
+// FastH3 auto prompt builder
+// ============================================================
+function getH3Presets() {
+  let custom = [];
+  try { custom = JSON.parse(localStorage.getItem('pulse_h3_presets') || '[]'); } catch (_) { custom = []; }
+  if (!Array.isArray(custom)) custom = [];
+  return [...H3_PROMPT_PRESETS, ...custom.filter(p => p && p.id && p.name)];
+}
+
+function getActiveBbTab() {
+  return bbTabs.find(t => t.id === activeTabId) || null;
+}
+
+function saveH3Preset() {
+  const tab = getActiveBbTab();
+  if (!tab || !tab.h3) return;
+  const name = prompt('Preset name:', 'My preset');
+  if (!name || !name.trim()) return;
+  let custom = [];
+  try { custom = JSON.parse(localStorage.getItem('pulse_h3_presets') || '[]'); } catch (_) { custom = []; }
+  if (!Array.isArray(custom)) custom = [];
+  custom.push({ id: 'custom_' + Date.now().toString(36), name: name.trim(), scene: tab.h3.scene || '', hasSpeech: !!tab.h3.hasSpeech });
+  localStorage.setItem('pulse_h3_presets', JSON.stringify(custom));
+  renderH3Wizard();
+  showToast('Preset saved');
+}
+
+function looksLikeGuid(value) {
+  const s = String(value || '').trim();
+  return /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(s) || /^[0-9a-f]{32}$/i.test(s);
+}
+
+function initH3StateFromAttachments(tab, forceScene = false) {
+  if (!tab) return;
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const prev = tab.h3 || {};
+  const prevSubjects = Array.isArray(prev.subjects) ? prev.subjects : [];
+  const prevAudios = Array.isArray(prev.audios) ? prev.audios : [];
+  const input = document.getElementById('bb-input');
+  const inputVal = input ? input.value.trim() : '';
+  const sceneFromInput = inputVal && !/^\s*subject_definitions:/i.test(inputVal) ? inputVal : '';
+  const firstImg = images[0];
+  const sceneDefault = (firstImg && (firstImg.prompt || '')) || '';
+
+  tab.h3 = {
+    enabled: !!prev.enabled,
+    preset: prev.preset || 'none',
+    scene: forceScene ? sceneDefault : (prev.scene || sceneFromInput || sceneDefault),
+    hasSpeech: prev.hasSpeech != null ? !!prev.hasSpeech : false,
+    subjects: images.map((img, i) => {
+      const old = prevSubjects[i] || {};
+      const rawFallback = (img.prompt || (img.name || '').replace(/\.[^.]+$/, '') || '').trim();
+      const fallback = looksLikeGuid(rawFallback) ? '' : rawFallback;
+      return {
+        description: old.description || fallback,
+        details: old.details || '',
+        retention: old.retention || 'fully_preserved',
+      };
+    }),
+    audios: audios.map((aud, j) => {
+      const old = prevAudios[j] || {};
+      return {
+        type: old.type || 'speech',
+        subjectIndex: Number.isInteger(old.subjectIndex) ? old.subjectIndex : 0,
+        retention: old.retention || (old.type === 'speech' ? 'reference' : 'fully_copy'),
+        language: old.language || 'English',
+        description: old.description || '',
+      };
+    }),
+    dialogue: Array.isArray(prev.dialogue) ? prev.dialogue.map(d => ({ ...d })) : [],
+  };
+  if (!tab.h3.dialogue.length) {
+    tab.h3.dialogue = [{ speaker: 1, language: 'English', text: '' }];
+  }
+}
+
+function buildH3AutoPrompt(tab) {
+  const h3 = (tab && tab.h3) || {};
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const subjects = images.map((img, i) => (h3.subjects || [])[i] || { description: '', retention: 'fully_preserved' });
+  const audioDefs = audios.map((aud, j) => (h3.audios || [])[j] || { type: 'speech', subjectIndex: 0, retention: 'reference', language: 'English', description: '' });
+  const lines = ['subject_definitions:'];
+
+  subjects.forEach((s, i) => {
+    const desc = (s.description || '').trim() || `the subject shown in <Picture ${i + 1}>`;
+    lines.push(`<Subject ${i + 1}> is ${desc}.`);
+    const details = (s.details || '').trim();
+    if (details) lines.push(`<Subject ${i + 1}> has ${details}.`);
+  });
+  audioDefs.forEach((a, j) => {
+    if (a.type === 'speech') {
+      if (subjects.length) {
+        const si = Math.min(Math.max(0, Number(a.subjectIndex) || 0), subjects.length - 1);
+        lines.push(`<Audio ${j + 1}> is the voice-timbre reference for <Subject ${si + 1}> (S${si + 1}).`);
+      } else {
+        lines.push(`<Audio ${j + 1}> is the voice-timbre reference for the speaker (S1).`);
+      }
+    } else {
+      const label = a.type === 'music' ? 'music' : 'ambient sound';
+      const extra = (a.description || '').trim();
+      lines.push(`<Audio ${j + 1}> is a ${label} reference${extra ? ': ' + extra : '.'}`);
+    }
+  });
+  lines.push('');
+
+  const subjTags = subjects.map((_, i) => `<Subject ${i + 1}> (S${i + 1})`).join(', ');
+  const audioTags = audioDefs.map((_, j) => `<Audio ${j + 1}>`).join(', ');
+  lines.push('summary:');
+  const hasSpeechAudio = audioDefs.some(a => a.type === 'speech');
+  if (audioDefs.length && subjects.length) {
+    if (hasSpeechAudio) {
+      lines.push(`[reference generation + audio reference] The target video features ${subjTags}, with ${audioTags} used as audio references.`);
+    } else {
+      lines.push(`[reference generation + audio] The target video features ${subjTags}, with ${audioTags} used as the audio track.`);
+    }
+  } else if (subjects.length) {
+    lines.push(`[reference generation] The target video features ${subjTags} from the attached reference images.`);
+  } else if (audioDefs.length) {
+    lines.push(`[audio reference] The target video uses ${audioTags} as audio references.`);
+  } else {
+    lines.push('[reference generation] The target video is generated from the prompt.');
+  }
+  lines.push('');
+
+  lines.push('retention_analysis:');
+  subjects.forEach((s, i) => {
+    const ret = s.retention || 'fully_preserved';
+    lines.push(`<Subject ${i + 1}> (appears in [Shot 1]): ${ret} - the subject from <Picture ${i + 1}> is retained.`);
+  });
+  audioDefs.forEach((a, j) => {
+    const ret = a.retention || (a.type === 'speech' ? 'reference' : 'fully_copy');
+    if (a.type === 'speech') {
+      if (subjects.length) {
+        const si = Math.min(Math.max(0, Number(a.subjectIndex) || 0), subjects.length - 1);
+        if (ret === 'fully_copy') {
+          lines.push(`<Audio ${j + 1}>: fully_copy - <Audio ${j + 1}> is reused 1:1 as the final audio.`);
+        } else {
+          lines.push(`<Audio ${j + 1}>: reference - <Subject ${si + 1}> (S${si + 1}) follows <Audio ${j + 1}>'s voice timbre without copying the original signal.`);
+        }
+      } else {
+        lines.push(`<Audio ${j + 1}>: ${ret} - the voice reference is used for the speaker.`);
+      }
+    } else {
+      const label = a.type === 'music' ? 'music track' : 'ambient track';
+      lines.push(`<Audio ${j + 1}>: ${ret} - <Audio ${j + 1}> is used as the ${label}.`);
+    }
+  });
+  lines.push('');
+
+  lines.push('detailed_description:');
+  lines.push('[Shot 1] ' + ((h3.scene || '').trim() || 'A cinematic shot.'));
+  if (h3.hasSpeech) {
+    (h3.dialogue || []).forEach((line) => {
+      const text = (line.text || '').trim();
+      if (!text) return;
+      const speaker = Number(line.speaker) || 0;
+      const lang = (line.language || 'English').trim() || 'English';
+      if (speaker > 0 && speaker <= subjects.length) {
+        lines.push(`<Subject ${speaker}> (S${speaker}) says, <d>[${lang}] ${text}</d>`);
+      } else {
+        lines.push(`A voice (S${speaker || 1}) says, <d>[${lang}] ${text}</d>`);
+      }
+    });
+  }
+  return lines.join('\n');
+}
+
+function stripTrailingPeriod(text) {
+  return String(text == null ? '' : text).replace(/\.\s*$/, '').trim();
+}
+
+function parseH3PromptState(text) {
+  const src = String(text || '');
+  if (!/^\s*subject_definitions:/im.test(src)) return null;
+  if (!/^\s*(retention_analysis|detailed_description):/im.test(src)) return null;
+
+  const state = { subjects: [], audios: [], dialogue: [], hasSpeech: false };
+  let section = '';
+
+  src.split(/\r?\n/).forEach((raw) => {
+    const line = raw.trim();
+    if (!line) return;
+    const header = line.match(/^(subject_definitions|summary|retention_analysis|detailed_description):\s*$/i);
+    if (header) { section = header[1].toLowerCase(); return; }
+
+    let m;
+    if (section === 'subject_definitions') {
+      m = line.match(/^<Subject (\d+)> is\s+(.+)$/i);
+      if (m) {
+        const i = Number(m[1]) - 1;
+        state.subjects[i] = state.subjects[i] || {};
+        state.subjects[i].description = stripTrailingPeriod(m[2]);
+        return;
+      }
+      m = line.match(/^<Subject (\d+)> has\s+(.+)$/i);
+      if (m) {
+        const i = Number(m[1]) - 1;
+        state.subjects[i] = state.subjects[i] || {};
+        state.subjects[i].details = stripTrailingPeriod(m[2]);
+        return;
+      }
+      m = line.match(/^<Audio (\d+)> is the voice-timbre reference for <Subject (\d+)>/i);
+      if (m) {
+        const j = Number(m[1]) - 1;
+        state.audios[j] = state.audios[j] || {};
+        state.audios[j].type = 'speech';
+        state.audios[j].subjectIndex = Math.max(0, Number(m[2]) - 1);
+        return;
+      }
+      m = line.match(/^<Audio (\d+)> is the voice-timbre reference for the speaker/i);
+      if (m) {
+        const j = Number(m[1]) - 1;
+        state.audios[j] = state.audios[j] || {};
+        state.audios[j].type = 'speech';
+        state.audios[j].subjectIndex = 0;
+        return;
+      }
+      m = line.match(/^<Audio (\d+)> is an? (music|ambient sound) reference(?::\s*(.*?))?\.?$/i);
+      if (m) {
+        const j = Number(m[1]) - 1;
+        state.audios[j] = state.audios[j] || {};
+        state.audios[j].type = /music/i.test(m[2]) ? 'music' : 'ambient';
+        state.audios[j].description = stripTrailingPeriod(m[3] || '');
+        return;
+      }
+      m = line.match(/^<Audio (\d+)> is (?:a |the )?(?:standalone )?reference audio\.?$/i);
+      if (m) {
+        const j = Number(m[1]) - 1;
+        state.audios[j] = state.audios[j] || {};
+        state.audios[j].type = 'speech';
+        state.audios[j].subjectIndex = 0;
+        return;
+      }
+    } else if (section === 'retention_analysis') {
+      m = line.match(/^<Subject (\d+)>[^:]*:\s*(fully_preserved|partially_preserved|reference)\b/i);
+      if (m) {
+        const i = Number(m[1]) - 1;
+        state.subjects[i] = state.subjects[i] || {};
+        state.subjects[i].retention = m[2].toLowerCase();
+        return;
+      }
+      m = line.match(/^<Audio (\d+)>:\s*(fully_copy|reference|fully_preserved|partially_preserved)\b/i);
+      if (m) {
+        const j = Number(m[1]) - 1;
+        state.audios[j] = state.audios[j] || {};
+        state.audios[j].retention = m[2].toLowerCase();
+        return;
+      }
+    } else if (section === 'detailed_description') {
+      m = line.match(/^\[Shot\s*1\]\s*(.*)$/i);
+      if (m && m[1]) { state.scene = m[1].trim(); return; }
+      m = line.match(/^<Subject (\d+)>\s*\(S\d+\)\s*says,\s*<d>\[([^\]]*)\]\s*([\s\S]*?)\s*<\/d>$/i);
+      if (m) {
+        state.dialogue.push({ speaker: Number(m[1]) || 0, language: m[2] || 'English', text: m[3] });
+        return;
+      }
+      m = line.match(/^A voice\s*\(S\d+\)\s*says,\s*<d>\[([^\]]*)\]\s*([\s\S]*?)\s*<\/d>$/i);
+      if (m) {
+        state.dialogue.push({ speaker: 0, language: m[1] || 'English', text: m[2] });
+        return;
+      }
+    }
+  });
+
+  state.hasSpeech = state.dialogue.length > 0;
+  return state;
+}
+
+function applyH3Prompt(tab) {
+  if (!tab || !tab.h3) return;
+  const text = buildH3AutoPrompt(tab);
+  const input = document.getElementById('bb-input');
+  if (input) input.value = text;
+  tab.prompt = text;
+  tab.h3.enabled = true;
+  updateAutoPromptUI();
+  autoResizeBbInput();
+}
+
+function openSpeechSetup() {
+  const tab = getActiveBbTab();
+  if (!tab) return;
+  if (speechWizardWinId && windows[speechWizardWinId]) {
+    focusWindow(speechWizardWinId);
+    renderSpeechSetup();
+    return;
+  }
+  speechWizardWinId = createWindow({
+    title: 'Speech Setup',
+    icon: 'fa-microphone-lines',
+    width: 540,
+    height: 680,
+    stateKey: 'SpeechSetup',
+    onClose: () => { speechWizardWinId = null; },
+  });
+  renderSpeechSetup();
+}
+
+async function renderSpeechSetup() {
+  if (!speechWizardWinId) return;
+  const win = document.getElementById(speechWizardWinId);
+  if (!win) return;
+  const body = win.querySelector('.window-body');
+  if (!body) return;
+  const tab = getActiveBbTab();
+  if (!tab) {
+    body.innerHTML = '<div style="padding:20px;font-size:12px;color:#666">No prompt tab selected.</div>';
+    return;
+  }
+  const sp = getSpeechConfig();
+  if (!speechEngines.length) await loadTtsEngines();
+  const engine = speechEngines.find(e => e.id === sp.engine) || speechEngines[0] || { id:'qwen3', label:'Qwen3-TTS', languages:['English'], controls:{} };
+  const controls = engine.controls || {};
+  const canEmotion = controls.emotion !== false;
+  const canInstruction = controls.instruction !== false;
+  const canRefText = controls.ref_text !== false;
+  const voices = (allAssets || []).filter(a => a.voice && (a.type === 'audio' || /\.(wav|mp3|ogg|m4a|aac|flac)$/i.test(a.filename || '')));
+  const attached = _bbAttachments.find(a => a.type === 'voice');
+  const attachedAsset = attached ? (allAssets || []).find(a => String(a.id) === String(attached.id)) : null;
+  const refText = sp.ref_text || (attachedAsset && attachedAsset.metadata && attachedAsset.metadata.voice && attachedAsset.metadata.voice.transcript) || '';
+  const inputEl = document.getElementById('bb-input');
+  const currentText = inputEl ? inputEl.value : (tab.prompt || '');
+  const languages = Array.isArray(engine.languages) && engine.languages.length ? engine.languages : ['English'];
+  const selLang = sp.language || engine.default_language || 'English';
+
+  const voiceOpts = '<option value="">No voice — drag one from Voices</option>' + voices.map(v => {
+    const label = v.prompt || v.filename || v.id;
+    const sel = attached && String(attached.id) === String(v.id) ? ' selected' : '';
+    return `<option value="${escAttr(String(v.id))}"${sel}>${escHtml(label)}</option>`;
+  }).join('');
+  const langOpts = languages.map(l => `<option value="${escAttr(l)}"${l === selLang ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
+  const emotions = [
+    ['neutral', 'Neutral'], ['happy', 'Happy'], ['sad', 'Sad'], ['angry', 'Angry'],
+    ['whisper', 'Whisper'], ['fearful', 'Fearful'], ['surprised', 'Surprised'],
+    ['disgusted', 'Disgusted'], ['custom', 'Custom'],
+  ];
+  const emotionOpts = emotions.map(([v, l]) => `<option value="${v}"${(sp.emotion || 'neutral') === v ? ' selected' : ''}>${l}</option>`).join('');
+
+  const builtInPresets = [
+    { id: 'spk_neutral', name: 'Neutral', language: 'English', emotion: 'neutral', instruction: '', seed: 0 },
+    { id: 'spk_happy', name: 'Happy', language: 'English', emotion: 'happy', instruction: '', seed: 0 },
+    { id: 'spk_sad', name: 'Sad', language: 'English', emotion: 'sad', instruction: '', seed: 0 },
+    { id: 'spk_angry', name: 'Angry', language: 'English', emotion: 'angry', instruction: '', seed: 0 },
+    { id: 'spk_whisper', name: 'Whisper', language: 'English', emotion: 'whisper', instruction: '', seed: 0 },
+    { id: 'spk_narrator', name: 'Narrator', language: 'English', emotion: 'neutral', instruction: 'A warm, measured narrator voice.', seed: 0 },
+  ];
+  let customPresets = [];
+  try { customPresets = JSON.parse(localStorage.getItem('pulse_speech_presets') || '[]'); } catch (_) { customPresets = []; }
+  if (!Array.isArray(customPresets)) customPresets = [];
+  const presets = [...builtInPresets, ...customPresets.filter(p => p && p.id && p.name)];
+  const presetOpts = '<option value="">Choose preset…</option>' + presets.map(p => `<option value="${escAttr(p.id)}">${escHtml(p.name)}</option>`).join('');
+
+  body.style.padding = '0';
+  body.style.background = '#fff';
+  body.innerHTML = `
+    <div class="h3w speech-wizard">
+      <div class="h3w-section">
+        <h4>Voice</h4>
+        ${speechEngines.length > 1 ? `
+        <div class="speech-row">
+          <label>Engine</label>
+          <select id="sp-engine" class="h3w-grow">
+            ${speechEngines.map(e => `<option value="${escAttr(e.id)}"${e.id === sp.engine ? ' selected' : ''}>${escHtml(e.label + (e.installed === false ? ' (not installed)' : ''))}</option>`).join('')}
+          </select>
+        </div>` : ''}
+        ${engine.installed === false ? `<div class="speech-note">This engine is not installed yet. Install its node pack/model in ComfyUI before generating.</div>` : ''}
+        <div class="speech-row">
+          <label>Voice</label>
+          <select id="sp-voice" class="h3w-grow">${voiceOpts}</select>
+        </div>
+        <div class="speech-note">Or drag a voice from the Voices library into the prompt bar.</div>
+        <div class="speech-row">
+          <label>Language</label>
+          <select id="sp-language" class="h3w-grow">${langOpts}</select>
+        </div>
+        ${canEmotion ? `
+        <div class="speech-row">
+          <label>Emotion</label>
+          <select id="sp-emotion" class="h3w-grow">${emotionOpts}</select>
+        </div>` : ''}
+        ${canInstruction ? `<textarea id="sp-instruction" placeholder="Optional custom instruction — overrides the emotion preset">${escHtml(sp.instruction || '')}</textarea>` : ''}
+        ${(!canEmotion && !canInstruction) ? `<div class="speech-note">Emotion / Whisper instructions are not exposed by this engine's clone node. Install a Qwen3 pack that supports “instruct”, or use another engine.</div>` : ''}
+      </div>
+      <div class="h3w-section">
+        <h4>Cloning</h4>
+        ${canRefText ? `
+        <textarea id="sp-ref-text" placeholder="Transcript of the reference voice">${escHtml(refText)}</textarea>
+        <div class="speech-note">Transcript improves cloning; leave blank for x-vector mode.</div>` : `<div class="speech-note">This engine clones from the reference audio without a reference transcript.</div>`}
+        <div class="speech-row">
+          <label>Seed</label>
+          <input type="number" id="sp-seed" class="h3w-grow" value="${Number(sp.seed) || 0}">
+          ${canRefText ? `<button type="button" id="sp-save-transcript" class="h3w-btn"${attached ? '' : ' disabled'}>Save transcript</button>` : ''}
+        </div>
+      </div>
+      <div class="h3w-section">
+        <h4>Spoken text</h4>
+        <textarea id="sp-text">${escHtml(currentText)}</textarea>
+      </div>
+      ${(canEmotion || canInstruction) ? `
+      <div class="h3w-section">
+        <h4>Preset</h4>
+        <div class="speech-row">
+          <select id="sp-preset" class="h3w-grow">${presetOpts}</select>
+          <button type="button" id="sp-save-preset" class="h3w-btn">Save preset</button>
+        </div>
+      </div>` : ''}
+      <div class="h3w-footer">
+        <button type="button" id="sp-cancel" class="h3w-btn">Cancel</button>
+        <button type="button" id="sp-apply" class="h3w-btn primary">Apply</button>
+      </div>
+    </div>`;
+
+  const voiceEl = document.getElementById('sp-voice');
+  if (voiceEl) voiceEl.onchange = () => {
+    const id = voiceEl.value;
+    _bbAttachments = _bbAttachments.filter(a => a.type !== 'voice');
+    if (id) {
+      const asset = voices.find(v => String(v.id) === String(id)) || (allAssets || []).find(a => String(a.id) === String(id));
+      if (asset) _bbAttachments.push({ type: 'voice', name: asset.filename, src: '/audio/' + asset.filename, id: asset.id, prompt: asset.prompt || '', voice: true });
+      sp.ref_text = (asset && asset.metadata && asset.metadata.voice && asset.metadata.voice.transcript) || '';
+    } else {
+      sp.ref_text = '';
+    }
+    renderAttachments();
+    renderSpeechSetup();
+  };
+
+  const langEl = document.getElementById('sp-language');
+  if (langEl) langEl.onchange = () => { sp.language = langEl.value; };
+  const emotionEl = document.getElementById('sp-emotion');
+  if (emotionEl) emotionEl.onchange = () => { sp.emotion = emotionEl.value; };
+  const instructionEl = document.getElementById('sp-instruction');
+  if (instructionEl) instructionEl.oninput = () => { sp.instruction = instructionEl.value; };
+  const seedEl = document.getElementById('sp-seed');
+  if (seedEl) seedEl.oninput = () => { sp.seed = Number(seedEl.value) || 0; };
+  const refEl = document.getElementById('sp-ref-text');
+  if (refEl) refEl.oninput = () => { sp.ref_text = refEl.value; };
+
+  const saveTranscriptBtn = document.getElementById('sp-save-transcript');
+  if (saveTranscriptBtn) saveTranscriptBtn.onclick = async () => {
+    const v = _bbAttachments.find(a => a.type === 'voice');
+    if (!v) return;
+    const transcript = document.getElementById('sp-ref-text').value;
+    const language = document.getElementById('sp-language').value;
+    try {
+      const res = await apiPost('/tts/voices/' + v.id, { transcript, language });
+      const a = (allAssets || []).find(x => String(x.id) === String(v.id));
+      if (a) {
+        a.metadata = a.metadata || {};
+        a.metadata.voice = Object.assign({}, a.metadata.voice || {}, (res && res.voice) || {}, { transcript, language });
+      }
+      sp.ref_text = transcript;
+      showToast('Transcript saved');
+      renderSpeechSetup();
+    } catch (e) { showToast('Failed to save transcript: ' + e.message, 'error'); }
+  };
+
+  const presetEl = document.getElementById('sp-preset');
+  if (presetEl) presetEl.onchange = () => {
+    const p = presets.find(x => x.id === presetEl.value);
+    if (!p) return;
+    const langField = document.getElementById('sp-language');
+    if (langField && languages.includes(p.language)) langField.value = p.language;
+    const emField = document.getElementById('sp-emotion');
+    if (emField) emField.value = p.emotion || 'neutral';
+    const insField = document.getElementById('sp-instruction');
+    if (insField) insField.value = p.instruction || '';
+    const seedField = document.getElementById('sp-seed');
+    if (seedField) seedField.value = Number(p.seed) || 0;
+    sp.language = langField ? langField.value : sp.language;
+    sp.emotion = emField ? emField.value : sp.emotion;
+    sp.instruction = insField ? insField.value : sp.instruction;
+    sp.seed = Number(seedField ? seedField.value : sp.seed) || 0;
+  };
+
+  const savePresetBtn = document.getElementById('sp-save-preset');
+  if (savePresetBtn) savePresetBtn.onclick = () => {
+    const name = prompt('Preset name:', 'My speech preset');
+    if (!name || !name.trim()) return;
+    let custom = [];
+    try { custom = JSON.parse(localStorage.getItem('pulse_speech_presets') || '[]'); } catch (_) { custom = []; }
+    if (!Array.isArray(custom)) custom = [];
+  const engineEl = document.getElementById('sp-engine');
+  if (engineEl) engineEl.onchange = async () => {
+    const id = engineEl.value;
+    sp.engine = id;
+    currentSpeechEngine = id;
+    try { await apiPost('/settings', { tts_engine: id }); } catch (_) {}
+    renderSpeechSetup();
+    updatePromptModelBadge();
+  };
+
+  const langEl = document.getElementById('sp-language');
+    const emEl = document.getElementById('sp-emotion');
+    const insEl = document.getElementById('sp-instruction');
+    const seedEl = document.getElementById('sp-seed');
+    custom.push({
+      id: 'custom_' + Date.now().toString(36),
+      name: name.trim(),
+      language: langEl ? langEl.value : '',
+      emotion: emEl ? emEl.value : 'neutral',
+      instruction: insEl ? insEl.value : '',
+      seed: Number(seedEl ? seedEl.value : 0) || 0,
+    });
+    localStorage.setItem('pulse_speech_presets', JSON.stringify(custom));
+    renderSpeechSetup();
+    showToast('Preset saved');
+  };
+
+  document.getElementById('sp-apply').onclick = () => {
+    const langField = document.getElementById('sp-language');
+    const emField = document.getElementById('sp-emotion');
+    const insField = document.getElementById('sp-instruction');
+    const seedField = document.getElementById('sp-seed');
+    const refField = document.getElementById('sp-ref-text');
+    sp.language = langField ? langField.value : sp.language;
+    sp.emotion = emField ? emField.value : sp.emotion;
+    sp.instruction = insField ? insField.value : sp.instruction;
+    sp.seed = Number(seedField ? seedField.value : sp.seed) || 0;
+    sp.ref_text = refField ? refField.value : sp.ref_text;
+    const text = document.getElementById('sp-text').value;
+    const input = document.getElementById('bb-input');
+    if (input) { input.value = text; autoResizeBbInput(); }
+    tab.prompt = text;
+    closeWindow(speechWizardWinId);
+    renderAttachments();
+    updatePromptModelBadge();
+    showToast('Speech settings applied');
+  };
+
+  document.getElementById('sp-cancel').onclick = () => closeWindow(speechWizardWinId);
+}
+
+function updateAutoPromptUI() {
+  const wrap = document.getElementById('bb-auto-prompt-wrap');
+  if (bbMode === 'speech') { if (wrap) wrap.style.display = 'none'; return; }
+  const isAutoModel = currentVideoModel === 'fasth3' || currentVideoModel === 'ltx';
+  if (wrap) wrap.style.display = isAutoModel ? 'flex' : 'none';
+  const tab = getActiveBbTab();
+  const cb = document.getElementById('bb-auto-prompt-enabled');
+  if (cb) {
+    const enabled = currentVideoModel === 'fasth3'
+      ? !!(tab && tab.h3 && tab.h3.enabled)
+      : currentVideoModel === 'ltx'
+        ? !!(tab && tab.ltx && tab.ltx.enabled)
+        : false;
+    cb.checked = enabled;
+  }
+}
+
+function openH3Wizard() {
+  if (currentVideoModel !== 'fasth3') return;
+  const tab = getActiveBbTab();
+  if (!tab) return;
+  if (!tab.h3) initH3StateFromAttachments(tab);
+  if (h3WizardWinId && windows[h3WizardWinId]) {
+    focusWindow(h3WizardWinId);
+    renderH3Wizard();
+    return;
+  }
+  h3WizardWinId = createWindow({
+    title: 'FastH3 Auto Prompt',
+    icon: 'fa-wand-magic-sparkles',
+    width: 740,
+    height: 800,
+    stateKey: 'FastH3AutoPrompt',
+    onClose: () => { h3WizardWinId = null; },
+  });
+  renderH3Wizard();
+}
+
+function renderH3Wizard() {
+  if (!h3WizardWinId) return;
+  const win = document.getElementById(h3WizardWinId);
+  if (!win) return;
+  const body = win.querySelector('.window-body');
+  if (!body) return;
+  const tab = getActiveBbTab();
+  if (!tab) {
+    body.innerHTML = '<div style="padding:20px;font-size:12px;color:#666">No prompt tab selected.</div>';
+    return;
+  }
+  if (!tab.h3) initH3StateFromAttachments(tab);
+  const h3 = tab.h3;
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const presets = getH3Presets();
+
+  const presetOpts = presets.map(p => `<option value="${escAttr(p.id)}"${h3.preset === p.id ? ' selected' : ''}>${escHtml(p.name)}</option>`).join('');
+
+  const subjectRows = images.map((img, i) => {
+    const s = (h3.subjects || [])[i] || {};
+    const label = img.prompt || img.name || `Image ${i + 1}`;
+    const retOpts = ['fully_preserved', 'partially_preserved', 'reference'].map(v => `<option value="${v}"${(s.retention || 'fully_preserved') === v ? ' selected' : ''}>${v}</option>`).join('');
+    return `<div class="h3w-row">
+      <label>Subject ${i + 1}</label>
+      <input type="text" class="h3w-grow h3w-subject-desc" data-idx="${i}" value="${escAttr(s.description || '')}" placeholder="Describe this subject">
+      <select class="h3w-subject-ret" data-idx="${i}">${retOpts}</select>
+      <span class="h3w-note" title="${escAttr(label)}">${escHtml(label).slice(0, 16)}</span>
+    </div>
+    <div class="h3w-row">
+      <label></label>
+      <input type="text" class="h3w-grow h3w-subject-details" data-idx="${i}" value="${escAttr(s.details || '')}" placeholder="Face, hair, clothing details (recommended for identity)">
+    </div>`;
+  }).join('');
+
+  const audioRows = audios.map((aud, j) => {
+    const a = (h3.audios || [])[j] || {};
+    const type = a.type || 'speech';
+    const subjectOpts = images.length
+      ? images.map((_, i) => `<option value="${i}"${Number(a.subjectIndex) === i ? ' selected' : ''}>Subject ${i + 1}</option>`).join('')
+      : '<option value="0">Voice</option>';
+    const speechFields = type === 'speech'
+      ? `<select class="h3w-audio-subject" data-idx="${j}">${subjectOpts}</select>
+         <select class="h3w-audio-ret" data-idx="${j}">
+           <option value="reference"${(a.retention || 'reference') === 'reference' ? ' selected' : ''}>reference (voice timbre)</option>
+           <option value="fully_copy"${a.retention === 'fully_copy' ? ' selected' : ''}>fully_copy (reuse 1:1)</option>
+         </select>`
+      : `<select class="h3w-audio-ret" data-idx="${j}">
+           <option value="fully_copy"${(a.retention || 'fully_copy') === 'fully_copy' ? ' selected' : ''}>fully_copy</option>
+           <option value="reference"${a.retention === 'reference' ? ' selected' : ''}>reference</option>
+         </select>
+         <input type="text" class="h3w-grow h3w-audio-desc" data-idx="${j}" value="${escAttr(a.description || '')}" placeholder="Music/ambient description (optional)">`;
+    return `<div class="h3w-row">
+      <label>Audio ${j + 1}</label>
+      <select class="h3w-audio-type" data-idx="${j}">
+        <option value="speech"${type === 'speech' ? ' selected' : ''}>Speech / Voice</option>
+        <option value="music"${type === 'music' ? ' selected' : ''}>Music</option>
+        <option value="ambient"${type === 'ambient' ? ' selected' : ''}>Ambient / SFX</option>
+      </select>
+      ${speechFields}
+      <span class="h3w-note" title="${escAttr(aud.name || '')}">${escHtml(aud.name || '').slice(0, 16)}</span>
+    </div>`;
+  }).join('');
+
+  const dialogueRows = (h3.dialogue || []).map((line, k) => {
+    const speakerOpts = `<option value="0"${Number(line.speaker) === 0 ? ' selected' : ''}>Voice</option>` +
+      images.map((_, i) => `<option value="${i + 1}"${Number(line.speaker) === i + 1 ? ' selected' : ''}>Subject ${i + 1} (S${i + 1})</option>`).join('');
+    return `<div class="h3w-row">
+      <select class="h3w-dlg-speaker" data-idx="${k}">${speakerOpts}</select>
+      <input type="text" class="h3w-dlg-lang" data-idx="${k}" value="${escAttr(line.language || 'English')}" placeholder="Language" style="width:70px">
+      <input type="text" class="h3w-grow h3w-dlg-text" data-idx="${k}" value="${escAttr(line.text || '')}" placeholder="Dialogue line">
+      <button type="button" class="h3w-btn h3w-dlg-del" data-idx="${k}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+    </div>`;
+  }).join('');
+
+  body.style.padding = '0';
+  body.style.background = '#fff';
+  body.innerHTML = `
+    <div class="h3w">
+      <div class="h3w-section">
+        <h4>Preset</h4>
+        <div class="h3w-row">
+          <select id="h3w-preset" class="h3w-grow">${presetOpts}</select>
+          <button type="button" id="h3w-save-preset" class="h3w-btn">Save as preset</button>
+        </div>
+        <div class="h3w-note">Presets fill the scene and speech setting; everything stays editable.</div>
+      </div>
+      <div class="h3w-section">
+        <h4>Scene</h4>
+        <textarea id="h3w-scene" placeholder="Describe the scene, action and camera style...">${escHtml(h3.scene || '')}</textarea>
+        <label class="h3w-row" style="margin-top:6px">
+          <input type="checkbox" id="h3w-has-speech"${h3.hasSpeech ? ' checked' : ''}> This video has dialogue / speech
+        </label>
+      </div>
+      <div class="h3w-section">
+        <h4>Subjects (${images.length})</h4>
+        ${subjectRows || '<div class="h3w-note">Attach images to the prompt bar to add subjects.</div>'}
+      </div>
+      <div class="h3w-section">
+        <h4>Audio (${audios.length})</h4>
+        ${audioRows || '<div class="h3w-note">Attach audio to the prompt bar to add audio references.</div>'}
+      </div>
+      <div class="h3w-section" id="h3w-dialogue-section" style="${h3.hasSpeech ? '' : 'display:none'}">
+        <h4>Dialogue</h4>
+        ${dialogueRows || '<div class="h3w-note">No dialogue lines yet.</div>'}
+        <button type="button" id="h3w-add-dialogue" class="h3w-btn" style="margin-top:6px">+ Add line</button>
+      </div>
+      <div class="h3w-section">
+        <h4>Prompt preview</h4>
+        <textarea id="h3w-preview" class="h3w-preview" readonly></textarea>
+      </div>
+      <div class="h3w-footer">
+        <button type="button" id="h3w-refresh" class="h3w-btn">Refresh attachments</button>
+        <button type="button" id="h3w-generate" class="h3w-btn primary">Use Prompt</button>
+      </div>
+    </div>`;
+
+  const refreshPreview = () => {
+    const prev = document.getElementById('h3w-preview');
+    if (prev) prev.value = buildH3AutoPrompt(tab);
+  };
+
+  const presetEl = document.getElementById('h3w-preset');
+  if (presetEl) presetEl.onchange = () => {
+    const p = getH3Presets().find(x => x.id === presetEl.value);
+    h3.preset = presetEl.value;
+    if (p && p.id !== 'none') {
+      h3.scene = p.scene || '';
+      h3.hasSpeech = !!p.hasSpeech;
+    }
+    renderH3Wizard();
+  };
+
+  const savePresetBtn = document.getElementById('h3w-save-preset');
+  if (savePresetBtn) savePresetBtn.onclick = saveH3Preset;
+
+  const sceneEl = document.getElementById('h3w-scene');
+  if (sceneEl) sceneEl.oninput = () => { h3.scene = sceneEl.value; refreshPreview(); };
+
+  const speechEl = document.getElementById('h3w-has-speech');
+  if (speechEl) speechEl.onchange = () => {
+    h3.hasSpeech = speechEl.checked;
+    const sec = document.getElementById('h3w-dialogue-section');
+    if (sec) sec.style.display = h3.hasSpeech ? '' : 'none';
+    refreshPreview();
+  };
+
+  body.querySelectorAll('.h3w-subject-desc').forEach(el => {
+    el.oninput = () => { const i = Number(el.dataset.idx); h3.subjects[i] = h3.subjects[i] || {}; h3.subjects[i].description = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-subject-details').forEach(el => {
+    el.oninput = () => { const i = Number(el.dataset.idx); h3.subjects[i] = h3.subjects[i] || {}; h3.subjects[i].details = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-subject-ret').forEach(el => {
+    el.onchange = () => { const i = Number(el.dataset.idx); h3.subjects[i] = h3.subjects[i] || {}; h3.subjects[i].retention = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-audio-type').forEach(el => {
+    el.onchange = () => {
+      const j = Number(el.dataset.idx);
+      h3.audios[j] = h3.audios[j] || {};
+      h3.audios[j].type = el.value;
+      h3.audios[j].retention = el.value === 'speech' ? 'reference' : 'fully_copy';
+      renderH3Wizard();
+    };
+  });
+  body.querySelectorAll('.h3w-audio-subject').forEach(el => {
+    el.onchange = () => { const j = Number(el.dataset.idx); h3.audios[j] = h3.audios[j] || {}; h3.audios[j].subjectIndex = Number(el.value) || 0; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-audio-ret').forEach(el => {
+    el.onchange = () => { const j = Number(el.dataset.idx); h3.audios[j] = h3.audios[j] || {}; h3.audios[j].retention = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-audio-desc').forEach(el => {
+    el.oninput = () => { const j = Number(el.dataset.idx); h3.audios[j] = h3.audios[j] || {}; h3.audios[j].description = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-dlg-speaker').forEach(el => {
+    el.onchange = () => { const k = Number(el.dataset.idx); h3.dialogue[k] = h3.dialogue[k] || {}; h3.dialogue[k].speaker = Number(el.value) || 0; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-dlg-lang').forEach(el => {
+    el.oninput = () => { const k = Number(el.dataset.idx); h3.dialogue[k] = h3.dialogue[k] || {}; h3.dialogue[k].language = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-dlg-text').forEach(el => {
+    el.oninput = () => { const k = Number(el.dataset.idx); h3.dialogue[k] = h3.dialogue[k] || {}; h3.dialogue[k].text = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.h3w-dlg-del').forEach(el => {
+    el.onclick = () => {
+      const k = Number(el.dataset.idx);
+      h3.dialogue.splice(k, 1);
+      if (!h3.dialogue.length) h3.dialogue = [{ speaker: 1, language: 'English', text: '' }];
+      renderH3Wizard();
+    };
+  });
+
+  const addDlg = document.getElementById('h3w-add-dialogue');
+  if (addDlg) addDlg.onclick = () => {
+    h3.dialogue.push({ speaker: 1, language: 'English', text: '' });
+    renderH3Wizard();
+  };
+
+  const refreshBtn = document.getElementById('h3w-refresh');
+  if (refreshBtn) refreshBtn.onclick = () => {
+    initH3StateFromAttachments(tab);
+    renderH3Wizard();
+  };
+
+  const genBtn = document.getElementById('h3w-generate');
+  if (genBtn) genBtn.onclick = () => {
+    applyH3Prompt(tab);
+    refreshPreview();
+    showToast('Auto prompt applied to the prompt bar');
+  };
+
+  refreshPreview();
+}
+
+// ============================================================
+// LTX auto prompt builder
+// ============================================================
+function getLtxPresets() {
+  let custom = [];
+  try { custom = JSON.parse(localStorage.getItem('pulse_ltx_presets') || '[]'); } catch (_) { custom = []; }
+  if (!Array.isArray(custom)) custom = [];
+  return [...LTX_PROMPT_PRESETS, ...custom.filter(p => p && p.id && p.name)];
+}
+
+function saveLtxPreset() {
+  const tab = getActiveBbTab();
+  if (!tab || !tab.ltx) return;
+  const name = prompt('Preset name:', 'My LTX preset');
+  if (!name || !name.trim()) return;
+  let custom = [];
+  try { custom = JSON.parse(localStorage.getItem('pulse_ltx_presets') || '[]'); } catch (_) { custom = []; }
+  if (!Array.isArray(custom)) custom = [];
+  const l = tab.ltx;
+  custom.push({
+    id: 'custom_' + Date.now().toString(36),
+    name: name.trim(),
+    fields: {
+      shotType: l.shotType, action: l.action, setting: l.setting,
+      camera: l.camera, lighting: l.lighting, style: l.style,
+      audioType: l.audioType, audioDescription: l.audioDescription, hasSpeech: l.hasSpeech,
+    },
+  });
+  localStorage.setItem('pulse_ltx_presets', JSON.stringify(custom));
+  renderLtxWizard();
+  showToast('Preset saved');
+}
+
+function initLtxStateFromAttachments(tab) {
+  if (!tab) return;
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const prev = tab.ltx || {};
+  const firstImg = images[0];
+  const rawSubject = firstImg ? (firstImg.prompt || (firstImg.name || '').replace(/\.[^.]+$/, '') || '') : '';
+  const subjectDefault = looksLikeGuid(rawSubject) ? '' : rawSubject;
+  tab.ltx = {
+    enabled: !!prev.enabled,
+    preset: prev.preset || 'none',
+    shotType: prev.shotType || 'medium shot',
+    subject: prev.subject != null ? prev.subject : subjectDefault,
+    action: prev.action || '',
+    setting: prev.setting || '',
+    camera: prev.camera || 'is static',
+    lighting: prev.lighting || '',
+    style: prev.style || 'cinematic',
+    audioType: prev.audioType || (audios.length ? 'music' : 'none'),
+    audioDescription: prev.audioDescription || '',
+    hasSpeech: prev.hasSpeech != null ? !!prev.hasSpeech : false,
+    dialogue: Array.isArray(prev.dialogue) ? prev.dialogue.map(d => ({ ...d })) : [],
+  };
+  if (!tab.ltx.dialogue.length) {
+    tab.ltx.dialogue = [{ speaker: 'subject', language: 'English', text: '' }];
+  }
+}
+
+function buildLtxAutoPrompt(tab) {
+  const ltx = (tab && tab.ltx) || {};
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const hasImage = images.length > 0;
+  const hasAudio = audios.length > 0;
+  const subject = (ltx.subject || '').trim();
+  const action = (ltx.action || '').trim();
+  const setting = (ltx.setting || '').trim();
+  const shotType = (ltx.shotType || '').trim();
+  const camera = (ltx.camera || '').trim();
+  const lighting = (ltx.lighting || '').trim();
+  const style = (ltx.style || '').trim();
+  const audioType = ltx.audioType || 'none';
+  const audioDesc = (ltx.audioDescription || '').trim();
+  const hasSpeech = !!ltx.hasSpeech || audioType === 'speech';
+
+  const parts = [];
+  if (!hasImage) {
+    let s = '';
+    if (shotType) s += shotType + ' of ';
+    s += subject || 'a subject';
+    if (action) s += ', ' + action;
+    if (setting) s += ', in ' + setting;
+    parts.push(s + '.');
+  } else {
+    let s = subject ? subject + ' ' : '';
+    s += action || 'moves naturally';
+    parts.push(s + '.');
+    if (setting) parts.push('The scene is ' + setting + '.');
+  }
+  if (camera) parts.push('The camera ' + camera + '.');
+  if (lighting) parts.push('The scene is lit by ' + lighting + '.');
+  if (style) parts.push('The visual style is ' + style + '.');
+  if (hasAudio) {
+    if (audioType === 'speech') parts.push('The audio features spoken dialogue.');
+    else if (audioType === 'music') parts.push(audioDesc ? 'Music: ' + audioDesc + '.' : 'Music plays in the background.');
+    else if (audioType === 'ambient') parts.push(audioDesc ? 'Ambient sound: ' + audioDesc + '.' : 'Ambient sound fills the scene.');
+  }
+  if (hasSpeech) {
+    (ltx.dialogue || []).forEach((line) => {
+      const text = (line.text || '').trim();
+      if (!text) return;
+      const lang = (line.language || 'English').trim();
+      const speaker = (line.speaker || 'subject');
+      const rawLabel = speaker === 'subject' ? (subject || 'The subject') : speaker;
+      const speakerLabel = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
+      const langPart = lang && lang.toLowerCase() !== 'english' ? ` in ${lang}` : '';
+      const lineText = /[.!?]$/.test(text) ? text : text + '.';
+      parts.push(`${speakerLabel} says${langPart}, "${lineText}"`);
+    });
+  }
+  return parts.filter(Boolean).join(' ');
+}
+
+function parseLtxPromptState(text, base) {
+  const src = String(text || '').trim();
+  if (!src) return null;
+  const looksLtx =
+    /The camera\s+/i.test(src) ||
+    /The visual style is\s+/i.test(src) ||
+    /The scene is lit by\s+/i.test(src) ||
+    /Music:\s*|Music plays in the background\./i.test(src) ||
+    /Ambient sound:\s*|Ambient sound fills the scene\./i.test(src) ||
+    /The audio features spoken dialogue\./i.test(src);
+  if (!looksLtx) return null;
+
+  const baseStr = typeof base === 'string'
+    ? base.trim()
+    : (base && (base.prompt || base.subject) ? String(base.prompt || base.subject).trim() : '');
+  const state = { dialogue: [] };
+  const firstMatch = src.match(/^([\s\S]*?)\.(?:\s|$)/);
+  const firstSentence = (firstMatch ? firstMatch[1] : src).trim();
+
+  if (baseStr && firstSentence.toLowerCase().startsWith(baseStr.toLowerCase())) {
+    const subject = firstSentence.slice(0, baseStr.length).trim() || baseStr;
+    const action = firstSentence.slice(baseStr.length).trim();
+    if (subject) state.subject = subject;
+    if (action) state.action = action;
+  } else {
+    let head = firstSentence;
+    const settingMatch = head.match(/,\s*in\s+(.+)$/i);
+    if (settingMatch) {
+      state.setting = settingMatch[1].trim();
+      head = head.slice(0, settingMatch.index).trim();
+    }
+    const shotMatch = head.match(/^(extreme close-up|close-up|medium close-up|medium shot|medium wide shot|wide shot|establishing shot|selfie close-up|selfie medium shot|over-the-shoulder shot|overhead shot)\s+of\s+(.+)$/i);
+    if (shotMatch) {
+      state.shotType = shotMatch[1];
+      head = shotMatch[2].trim();
+    }
+    const commaIdx = head.indexOf(', ');
+    if (commaIdx >= 0) {
+      state.subject = head.slice(0, commaIdx).trim();
+      state.action = head.slice(commaIdx + 2).trim();
+    } else if (baseStr) {
+      if (head) state.action = head;
+    } else {
+      if (head) state.subject = head;
+    }
+  }
+
+  const camera = src.match(/\bThe camera\s+(.+?)\.(?:\s|$)/i);
+  if (camera) state.camera = stripTrailingPeriod(camera[1]);
+  const lighting = src.match(/\bThe scene is lit by\s+(.+?)\.(?:\s|$)/i);
+  if (lighting) state.lighting = stripTrailingPeriod(lighting[1]);
+  const style = src.match(/\bThe visual style is\s+(.+?)\.(?:\s|$)/i);
+  if (style) state.style = stripTrailingPeriod(style[1]);
+  if (state.setting == null) {
+    const setting = src.match(/\bThe scene is\s+(?!lit by)(.+?)\.(?:\s|$)/i);
+    if (setting) state.setting = stripTrailingPeriod(setting[1]);
+  }
+
+  if (/The audio features spoken dialogue\./i.test(src)) {
+    state.audioType = 'speech';
+  } else {
+    const music = src.match(/\bMusic:\s*(.+?)\.(?:\s|$)/i);
+    if (music) {
+      state.audioType = 'music';
+      state.audioDescription = stripTrailingPeriod(music[1]);
+    } else if (/Music plays in the background\./i.test(src)) {
+      state.audioType = 'music';
+      state.audioDescription = '';
+    } else {
+      const ambient = src.match(/\bAmbient sound:\s*(.+?)\.(?:\s|$)/i);
+      if (ambient) {
+        state.audioType = 'ambient';
+        state.audioDescription = stripTrailingPeriod(ambient[1]);
+      } else if (/Ambient sound fills the scene\./i.test(src)) {
+        state.audioType = 'ambient';
+        state.audioDescription = '';
+      }
+    }
+  }
+
+  const dlgRe = /([^.\n"]+?)\s+says(?: in ([^,]+))?,\s*"([^"]*)"/g;
+  let dm;
+  while ((dm = dlgRe.exec(src))) {
+    const label = dm[1].trim();
+    const lower = label.toLowerCase();
+    const subjectLower = (state.subject || '').toLowerCase();
+    const isSubject = lower === 'subject' || lower === 'the subject' ||
+      (!!subjectLower && lower === subjectLower) ||
+      (!!baseStr && lower === baseStr.toLowerCase());
+    let lineText = dm[3] || '';
+    if (/\.$/.test(lineText)) lineText = lineText.slice(0, -1);
+    state.dialogue.push({
+      speaker: isSubject ? 'subject' : 'A voice',
+      language: (dm[2] || 'English').trim() || 'English',
+      text: lineText,
+    });
+  }
+  state.hasSpeech = state.dialogue.length > 0 || state.audioType === 'speech';
+  return state;
+}
+
+function applyLtxPrompt(tab) {
+  if (!tab || !tab.ltx) return;
+  const text = buildLtxAutoPrompt(tab);
+  const input = document.getElementById('bb-input');
+  if (input) input.value = text;
+  tab.prompt = text;
+  tab.ltx.enabled = true;
+  updateAutoPromptUI();
+  autoResizeBbInput();
+}
+
+function openLtxWizard() {
+  if (currentVideoModel !== 'ltx') return;
+  const tab = getActiveBbTab();
+  if (!tab) return;
+  if (!tab.ltx) initLtxStateFromAttachments(tab);
+  if (ltxWizardWinId && windows[ltxWizardWinId]) {
+    focusWindow(ltxWizardWinId);
+    renderLtxWizard();
+    return;
+  }
+  ltxWizardWinId = createWindow({
+    title: 'LTX Auto Prompt',
+    icon: 'fa-wand-magic-sparkles',
+    width: 720,
+    height: 760,
+    stateKey: 'LtxAutoPrompt',
+    onClose: () => { ltxWizardWinId = null; },
+  });
+  renderLtxWizard();
+}
+
+function renderLtxWizard() {
+  if (!ltxWizardWinId) return;
+  const win = document.getElementById(ltxWizardWinId);
+  if (!win) return;
+  const body = win.querySelector('.window-body');
+  if (!body) return;
+  const tab = getActiveBbTab();
+  if (!tab) {
+    body.innerHTML = '<div style="padding:20px;font-size:12px;color:#666">No prompt tab selected.</div>';
+    return;
+  }
+  if (!tab.ltx) initLtxStateFromAttachments(tab);
+  const ltx = tab.ltx;
+  const images = _bbAttachments.filter(a => a.type === 'image');
+  const audios = _bbAttachments.filter(a => a.type === 'audio');
+  const hasImage = images.length > 0;
+  const hasAudio = audios.length > 0;
+  const presets = getLtxPresets();
+  const presetOpts = presets.map(p => `<option value="${escAttr(p.id)}"${ltx.preset === p.id ? ' selected' : ''}>${escHtml(p.name)}</option>`).join('');
+
+  const shotOpts = ['extreme close-up', 'close-up', 'medium close-up', 'medium shot', 'medium wide shot', 'wide shot', 'establishing shot', 'selfie close-up', 'selfie medium shot', 'over-the-shoulder shot', 'overhead shot']
+    .map(v => `<option value="${v}"${ltx.shotType === v ? ' selected' : ''}>${v}</option>`).join('');
+  const cameraOpts = ['is static', 'slowly dollies in', 'slowly dollies out', 'is handheld', 'is handheld and tracking', 'tracks the subject', 'pans across the scene', 'zooms in', 'zooms out', 'slowly orbits the subject']
+    .map(v => `<option value="${v}"${ltx.camera === v ? ' selected' : ''}>${v}</option>`).join('');
+
+  const dialogueRows = (ltx.dialogue || []).map((line, k) => `
+    <div class="h3w-row">
+      <select class="ltx-dlg-speaker" data-idx="${k}">
+        <option value="subject"${(line.speaker || 'subject') === 'subject' ? ' selected' : ''}>The subject</option>
+        <option value="A voice"${line.speaker === 'A voice' ? ' selected' : ''}>A voice</option>
+      </select>
+      <input type="text" class="ltx-dlg-lang" data-idx="${k}" value="${escAttr(line.language || 'English')}" placeholder="Language" style="width:70px">
+      <input type="text" class="h3w-grow ltx-dlg-text" data-idx="${k}" value="${escAttr(line.text || '')}" placeholder="Dialogue line">
+      <button type="button" class="h3w-btn ltx-dlg-del" data-idx="${k}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+    </div>`).join('');
+
+  body.style.padding = '0';
+  body.style.background = '#fff';
+  body.innerHTML = `
+    <div class="h3w">
+      <div class="h3w-section">
+        <h4>Preset</h4>
+        <div class="h3w-row">
+          <select id="ltx-preset" class="h3w-grow">${presetOpts}</select>
+          <button type="button" id="ltx-save-preset" class="h3w-btn">Save as preset</button>
+        </div>
+        <div class="h3w-note">${hasImage ? 'Image attached: the image defines appearance — focus on motion, camera and audio.' : 'Text-to-video: describe subject, action, setting, camera, lighting and audio.'}</div>
+      </div>
+      <div class="h3w-section">
+        <h4>Shot</h4>
+        <div class="h3w-row">
+          <label>Shot</label>
+          <select id="ltx-shot" class="h3w-grow">${shotOpts}</select>
+        </div>
+        <div class="h3w-row">
+          <label>Subject</label>
+          <input type="text" id="ltx-subject" class="h3w-grow" value="${escAttr(ltx.subject || '')}" placeholder="${hasImage ? 'Brief identifier (the image defines appearance)' : 'Describe the subject'}">
+        </div>
+        <div class="h3w-row">
+          <label>Action</label>
+          <textarea id="ltx-action" style="min-height:46px" placeholder="What happens / how the subject moves...">${escHtml(ltx.action || '')}</textarea>
+        </div>
+        <div class="h3w-row">
+          <label>Setting</label>
+          <input type="text" id="ltx-setting" class="h3w-grow" value="${escAttr(ltx.setting || '')}" placeholder="Where the scene takes place">
+        </div>
+        <div class="h3w-row">
+          <label>Camera</label>
+          <select id="ltx-camera" class="h3w-grow">${cameraOpts}</select>
+        </div>
+        <div class="h3w-row">
+          <label>Lighting</label>
+          <input type="text" id="ltx-lighting" class="h3w-grow" value="${escAttr(ltx.lighting || '')}" placeholder="e.g. golden hour, neon, soft studio light">
+        </div>
+        <div class="h3w-row">
+          <label>Style</label>
+          <input type="text" id="ltx-style" class="h3w-grow" value="${escAttr(ltx.style || '')}" placeholder="e.g. cinematic, film grain, commercial">
+        </div>
+      </div>
+      <div class="h3w-section">
+        <h4>Audio</h4>
+        ${hasAudio ? `
+        <div class="h3w-row">
+          <label>Type</label>
+          <select id="ltx-audio-type" class="h3w-grow">
+            <option value="none"${(ltx.audioType || 'none') === 'none' ? ' selected' : ''}>None</option>
+            <option value="ambient"${ltx.audioType === 'ambient' ? ' selected' : ''}>Ambient / SFX</option>
+            <option value="music"${ltx.audioType === 'music' ? ' selected' : ''}>Music</option>
+            <option value="speech"${ltx.audioType === 'speech' ? ' selected' : ''}>Speech / Voice</option>
+          </select>
+        </div>
+        <div class="h3w-row">
+          <label>Audio</label>
+          <input type="text" id="ltx-audio-desc" class="h3w-grow" value="${escAttr(ltx.audioDescription || '')}" placeholder="Describe the audio (music style, ambience, etc.)">
+        </div>` : '<div class="h3w-note">Attach audio to the prompt bar to describe it here.</div>'}
+        <label class="h3w-row" style="margin-top:6px">
+          <input type="checkbox" id="ltx-has-speech"${ltx.hasSpeech ? ' checked' : ''}> This video has dialogue / speech
+        </label>
+      </div>
+      <div class="h3w-section" id="ltx-dialogue-section" style="${(ltx.hasSpeech || ltx.audioType === 'speech') ? '' : 'display:none'}">
+        <h4>Dialogue</h4>
+        ${dialogueRows || '<div class="h3w-note">No dialogue lines yet.</div>'}
+        <button type="button" id="ltx-add-dialogue" class="h3w-btn" style="margin-top:6px">+ Add line</button>
+      </div>
+      <div class="h3w-section">
+        <h4>Prompt preview</h4>
+        <textarea id="ltx-preview" class="h3w-preview" readonly></textarea>
+      </div>
+      <div class="h3w-footer">
+        <button type="button" id="ltx-refresh" class="h3w-btn">Refresh attachments</button>
+        <button type="button" id="ltx-generate" class="h3w-btn primary">Use Prompt</button>
+      </div>
+    </div>`;
+
+  const refreshPreview = () => {
+    const prev = document.getElementById('ltx-preview');
+    if (prev) prev.value = buildLtxAutoPrompt(tab);
+  };
+
+  const presetEl = document.getElementById('ltx-preset');
+  if (presetEl) presetEl.onchange = () => {
+    const p = getLtxPresets().find(x => x.id === presetEl.value);
+    ltx.preset = presetEl.value;
+    if (p && p.id !== 'none' && p.fields) Object.assign(ltx, p.fields);
+    renderLtxWizard();
+  };
+  const savePresetBtn = document.getElementById('ltx-save-preset');
+  if (savePresetBtn) savePresetBtn.onclick = saveLtxPreset;
+
+  const shotEl = document.getElementById('ltx-shot');
+  if (shotEl) shotEl.onchange = () => { ltx.shotType = shotEl.value; refreshPreview(); };
+  const subjectEl = document.getElementById('ltx-subject');
+  if (subjectEl) subjectEl.oninput = () => { ltx.subject = subjectEl.value; refreshPreview(); };
+  const actionEl = document.getElementById('ltx-action');
+  if (actionEl) actionEl.oninput = () => { ltx.action = actionEl.value; refreshPreview(); };
+  const settingEl = document.getElementById('ltx-setting');
+  if (settingEl) settingEl.oninput = () => { ltx.setting = settingEl.value; refreshPreview(); };
+  const cameraEl = document.getElementById('ltx-camera');
+  if (cameraEl) cameraEl.onchange = () => { ltx.camera = cameraEl.value; refreshPreview(); };
+  const lightingEl = document.getElementById('ltx-lighting');
+  if (lightingEl) lightingEl.oninput = () => { ltx.lighting = lightingEl.value; refreshPreview(); };
+  const styleEl = document.getElementById('ltx-style');
+  if (styleEl) styleEl.oninput = () => { ltx.style = styleEl.value; refreshPreview(); };
+
+  const audioTypeEl = document.getElementById('ltx-audio-type');
+  if (audioTypeEl) audioTypeEl.onchange = () => {
+    ltx.audioType = audioTypeEl.value;
+    if (ltx.audioType === 'speech') ltx.hasSpeech = true;
+    renderLtxWizard();
+  };
+  const audioDescEl = document.getElementById('ltx-audio-desc');
+  if (audioDescEl) audioDescEl.oninput = () => { ltx.audioDescription = audioDescEl.value; refreshPreview(); };
+
+  const speechEl = document.getElementById('ltx-has-speech');
+  if (speechEl) speechEl.onchange = () => {
+    ltx.hasSpeech = speechEl.checked;
+    const sec = document.getElementById('ltx-dialogue-section');
+    if (sec) sec.style.display = (ltx.hasSpeech || ltx.audioType === 'speech') ? '' : 'none';
+    refreshPreview();
+  };
+
+  body.querySelectorAll('.ltx-dlg-speaker').forEach(el => {
+    el.onchange = () => { const k = Number(el.dataset.idx); ltx.dialogue[k] = ltx.dialogue[k] || {}; ltx.dialogue[k].speaker = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.ltx-dlg-lang').forEach(el => {
+    el.oninput = () => { const k = Number(el.dataset.idx); ltx.dialogue[k] = ltx.dialogue[k] || {}; ltx.dialogue[k].language = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.ltx-dlg-text').forEach(el => {
+    el.oninput = () => { const k = Number(el.dataset.idx); ltx.dialogue[k] = ltx.dialogue[k] || {}; ltx.dialogue[k].text = el.value; refreshPreview(); };
+  });
+  body.querySelectorAll('.ltx-dlg-del').forEach(el => {
+    el.onclick = () => {
+      const k = Number(el.dataset.idx);
+      ltx.dialogue.splice(k, 1);
+      if (!ltx.dialogue.length) ltx.dialogue = [{ speaker: 'subject', language: 'English', text: '' }];
+      renderLtxWizard();
+    };
+  });
+
+  const addDlg = document.getElementById('ltx-add-dialogue');
+  if (addDlg) addDlg.onclick = () => {
+    ltx.dialogue.push({ speaker: 'subject', language: 'English', text: '' });
+    renderLtxWizard();
+  };
+  const refreshBtn = document.getElementById('ltx-refresh');
+  if (refreshBtn) refreshBtn.onclick = () => { initLtxStateFromAttachments(tab); renderLtxWizard(); };
+  const genBtn = document.getElementById('ltx-generate');
+  if (genBtn) genBtn.onclick = () => { applyLtxPrompt(tab); refreshPreview(); showToast('LTX auto prompt applied'); };
+
+  refreshPreview();
+}
+
+function parseAssetMetadata(asset) {
+  let meta = asset && asset.metadata;
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta); } catch (_) { meta = {}; }
+  }
+  return (meta && typeof meta === 'object') ? meta : {};
+}
+
+function inferResolutionFromSize(w, h) {
+  if (!w && !h) return null;
+  const long = Math.max(w || 0, h || 0);
+  if (long >= 1500) return '1080p';
+  if (long >= 900) return '720p';
+  if (long >= 400) return '480p';
+  return null;
+}
+
+async function ensureAssetPool() {
+  if (allAssets && allAssets.length) return allAssets;
+  try {
+    const hist = await apiGet('/history');
+    allAssets = hist || [];
+    _libCache.assets = allAssets;
+    return allAssets;
+  } catch (_) {
+    return allAssets || [];
+  }
+}
+
+async function restoreAttachmentsFromGen(gen) {
+  const atts = (gen && gen.attachments) || {};
+  // Support both nested {images,audio,lora} and accidental flat arrays
+  const images = Array.isArray(atts.images) ? atts.images : (Array.isArray(atts) ? atts.filter(a => a && a.type === 'image') : []);
+  let audios = Array.isArray(atts.audios) ? atts.audios.filter(Boolean) : [];
+  if (!audios.length && atts.audio) audios = [atts.audio];
+  const lora = atts.lora || null;
+  let missing = 0;
+
+  const pool = await ensureAssetPool();
+
+  function findAsset(ref, typeHint) {
+    if (!ref) return null;
+    if (ref.id) {
+      const byId = pool.find(a => a.id === ref.id);
+      if (byId) return byId;
+    }
+    const name = ref.name || ref.filename;
+    if (!name) return null;
+    const base = name.split('/').pop();
+    return pool.find(a => {
+      if (typeHint === 'image' && a.type && a.type !== 'image') return false;
+      if (typeHint === 'audio' && a.type && a.type !== 'audio') return false;
+      return a.filename === name || a.filename === base;
+    }) || null;
+  }
+
+  _bbAttachments = [];
+
+  // LoRA cannot mix with media — prefer media when both present
+  const hasMedia = images.length > 0 || audios.length > 0;
+  if (lora && lora.name && !hasMedia) {
+    _bbAttachments.push({ type: 'lora', name: lora.name });
+    renderAttachments();
+    return { missing: 0 };
+  }
+
+  for (const img of images) {
+    if (!img) { missing++; continue; }
+    const asset = findAsset(img, 'image');
+    const filename = (asset && asset.filename) || img.name || img.filename || '';
+    if (!filename) {
+      missing++;
+      continue;
+    }
+    const aspect = asset
+      ? ((asset.width && asset.height) ? asset.width / asset.height : parseAspectRatio(asset.aspect_ratio))
+      : 1.5;
+    _bbAttachments.push({
+      type: 'image',
+      name: filename,
+      src: `/images/${filename}`,
+      aspect: aspect && isFinite(aspect) ? aspect : 1.5,
+      id: (asset && asset.id) || img.id || '',
+      prompt: (asset && asset.prompt) || '',
+    });
+  }
+
+  for (const audio of audios) {
+    const asset = findAsset(audio, 'audio');
+    const filename = (asset && asset.filename) || audio.name || audio.filename || '';
+    if (!filename) {
+      missing++;
+    } else {
+      _bbAttachments.push({
+        type: 'audio',
+        name: filename,
+        src: `/audio/${filename}`,
+        id: (asset && asset.id) || audio.id || '',
+        prompt: (asset && asset.prompt) || '',
+      });
+    }
+  }
+
+  renderAttachments();
+  return { missing };
+}
+
+async function applyGenToBottomBar(asset) {
+  if (!asset) return;
+
+  // Always re-fetch from history so we get fresh metadata.gen from DB
+  let full = asset;
+  try {
+    const hist = await apiGet('/history');
+    if (Array.isArray(hist)) {
+      allAssets = hist;
+      _libCache.assets = hist;
+      _libCache.childrenMap = buildChildrenMap(hist);
+      if (asset.id) {
+        const found = hist.find(a => a.id === asset.id);
+        if (found) full = found;
+      }
+    }
+  } catch (_) {}
+
+  const input = document.getElementById('bb-input');
+  if (input) input.value = '';
+  clearBottomBarAttachments();
+
+  const meta = parseAssetMetadata(full);
+  const gen = meta.gen || null;
+  const promptText = (gen && gen.original_prompt) || full.prompt || '';
+  if (input) input.value = promptText;
+  autoResizeBbInput();
+
+  const isVideoAsset = full.type === 'video' || (full.filename && full.filename.endsWith('.mp4'));
+  const mode = (gen && gen.mode) || (isVideoAsset ? 'video' : 'image');
+  setBottomBarMode(mode);
+
+  const res =
+    (gen && gen.resolution) ||
+    inferResolutionFromSize(full.width, full.height) ||
+    bbRes ||
+    '720p';
+  setBottomBarRes(res);
+
+  setBottomBarAr((gen && gen.aspect_ratio) || full.aspect_ratio || bbAr || '3:2');
+  if (mode === 'video') {
+    const dur = (gen && gen.duration != null)
+      ? gen.duration
+      : (meta.duration != null ? meta.duration : (full.duration != null ? full.duration : bbDuration));
+    setBottomBarDuration(dur);
+  }
+  setBottomBarEnhancer((gen && gen.enhancer_id) || 'none');
+  setBottomBarUpscale(!!((gen && gen.video_upscale === 'relayvsr_x2') || (gen && gen.upscale && gen.upscale.status === 'done')));
+
+  let missing = 0;
+  if (gen) {
+    const r = await restoreAttachmentsFromGen(gen);
+    missing = r.missing || 0;
+  } else if (full.parent_id) {
+    // Fallback: variations/children without gen — re-attach parent as source image
+    const pool = await ensureAssetPool();
+    const parent = pool.find(a => a.id === full.parent_id);
+    if (parent && parent.filename && parent.type !== 'audio' && parent.type !== 'video') {
+      const aspect = (parent.width && parent.height)
+        ? parent.width / parent.height
+        : parseAspectRatio(parent.aspect_ratio);
+      _bbAttachments.push({
+        type: 'image',
+        name: parent.filename,
+        src: `/images/${parent.filename}`,
+        aspect: aspect && isFinite(aspect) ? aspect : 1.5,
+        id: parent.id || '',
+        prompt: parent.prompt || '',
+      });
+      renderAttachments();
+    }
+  }
+
+  const updates = {};
+  if (gen && gen.image_model) {
+    currentImageModel = gen.image_model;
+    updates.image_model = gen.image_model;
+  }
+  if (gen && gen.i2i_model) {
+    currentI2iModel = gen.i2i_model;
+    updates.i2i_model = gen.i2i_model;
+  }
+  if (gen && gen.video_model) {
+    currentVideoModel = gen.video_model;
+    updates.video_model = gen.video_model;
+    updatePromptHelpVisibility();
+    if (currentVideoModel === 'grok') {
+      _bbAttachments = _bbAttachments.filter(a => a.type !== 'audio');
+      renderAttachments();
+    }
+  }
+  if (gen && gen.ltx_version) {
+    currentLtxVersion = String(gen.ltx_version) === '2.5' ? '2.5' : '2.3';
+    updates.ltx_version = currentLtxVersion;
+  }
+  if (gen && gen.fasth3_mode) {
+    currentFastH3Mode = gen.fasth3_mode === 'i2v' ? 'i2v' : 'reference';
+    updates.fasth3_mode = currentFastH3Mode;
+  }
+  if (Object.keys(updates).length) {
+    try { await apiPost('/settings', updates); } catch (_) {}
+  }
+  updatePromptModelBadge();
+
+  const tab = getActiveBbTab();
+  if (mode === 'video' && tab && currentVideoModel === 'fasth3') {
+    const savedH3 = (gen && gen.h3 && typeof gen.h3 === 'object')
+      ? JSON.parse(JSON.stringify(gen.h3))
+      : null;
+    const parsedH3 = !savedH3 && promptText ? parseH3PromptState(promptText) : null;
+    const src = savedH3 || parsedH3;
+    tab.h3 = null;
+    initH3StateFromAttachments(tab);
+    if (src) {
+      if (Array.isArray(src.subjects)) {
+        tab.h3.subjects = tab.h3.subjects.map((def, i) => {
+          const saved = src.subjects[i] || {};
+          return {
+            description: saved.description != null ? saved.description : def.description,
+            details: saved.details != null ? saved.details : def.details,
+            retention: saved.retention || def.retention,
+          };
+        });
+      }
+      if (Array.isArray(src.audios)) {
+        tab.h3.audios = tab.h3.audios.map((def, j) => {
+          const saved = src.audios[j] || {};
+          return {
+            type: saved.type || def.type,
+            subjectIndex: Number.isInteger(saved.subjectIndex) ? saved.subjectIndex : def.subjectIndex,
+            retention: saved.retention || def.retention,
+            language: saved.language || def.language,
+            description: saved.description != null ? saved.description : def.description,
+          };
+        });
+      }
+      if (src.scene != null) tab.h3.scene = src.scene;
+      if (src.preset != null) tab.h3.preset = src.preset;
+      if (src.hasSpeech != null) tab.h3.hasSpeech = !!src.hasSpeech;
+      if (Array.isArray(src.dialogue)) tab.h3.dialogue = src.dialogue.map(d => ({ ...d }));
+      tab.h3.enabled = parsedH3 ? true : !!src.enabled;
+    }
+    if (!tab.h3.dialogue.length) tab.h3.dialogue = [{ speaker: 1, language: 'English', text: '' }];
+    if (h3WizardWinId && windows[h3WizardWinId]) renderH3Wizard();
+  }
+  if (mode === 'video' && tab && currentVideoModel === 'ltx') {
+    const savedLtx = (gen && gen.ltx && typeof gen.ltx === 'object')
+      ? JSON.parse(JSON.stringify(gen.ltx))
+      : null;
+    const firstImg = _bbAttachments.find(a => a.type === 'image');
+    const basePrompt = firstImg ? (firstImg.prompt || '') : '';
+    const parsedLtx = !savedLtx && promptText ? parseLtxPromptState(promptText, basePrompt) : null;
+    const src = savedLtx || parsedLtx;
+    tab.ltx = null;
+    initLtxStateFromAttachments(tab);
+    if (src) {
+      ['shotType', 'subject', 'action', 'setting', 'camera', 'lighting', 'style', 'audioType', 'audioDescription'].forEach((key) => {
+        if (src[key] == null) return;
+        if (parsedLtx && src[key] === '') return;
+        tab.ltx[key] = src[key];
+      });
+      if (src.hasSpeech != null) tab.ltx.hasSpeech = !!src.hasSpeech;
+      if (Array.isArray(src.dialogue)) tab.ltx.dialogue = src.dialogue.map(d => ({ ...d }));
+      tab.ltx.enabled = parsedLtx ? true : !!src.enabled;
+    }
+    if (!tab.ltx.dialogue.length) tab.ltx.dialogue = [{ speaker: 'subject', language: 'English', text: '' }];
+    if (ltxWizardWinId && windows[ltxWizardWinId]) renderLtxWizard();
+  }
+  if (tab) tab.prompt = promptText;
+  updateAutoPromptUI();
+
+  if (!gen) {
+    showToast('Loaded prompt (no saved gen settings — re-generate once to capture full settings)', 'warning');
+  } else if (missing > 0) {
+    showToast(`Loaded prompt (${missing} attachment${missing === 1 ? '' : 's'} missing)`, 'warning');
+  } else {
+    showToast('Prompt loaded into bottom bar');
+  }
+  refreshOpenModelDialogs();
 }
 
 async function bbSend() {
@@ -3507,33 +5900,70 @@ async function bbSend() {
   let prompt = input.value.trim();
   if (!prompt) return;
 
+  if (bbMode === 'speech') {
+    const voice = _bbAttachments.find(a => a.type === 'voice');
+    if (!voice) { showToast('Drag a voice from the Voices library into the prompt bar', 'error'); return; }
+    const sp = getSpeechConfig();
+    const voiceAsset = (allAssets || []).find(a => String(a.id) === String(voice.id));
+    const voiceTranscript = (voiceAsset && voiceAsset.metadata && voiceAsset.metadata.voice && voiceAsset.metadata.voice.transcript) || '';
+    const job = {
+      id: Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+      prompt, original_prompt: prompt, mode: 'speech',
+      speech: { ...sp, ref_text: (sp.ref_text || voiceTranscript || '') },
+      attVoice: { id: voice.id || '', name: voice.name || '' },
+    };
+    _genQueue.push(job); updateQueueBadge(); processNext(); return;
+  }
+
   // Show rainbow immediately
   document.querySelector('.bb-inner')?.classList.add('is-generating');
 
   // Capture attachments immediately (before async enhancement)
   const attImages = _bbAttachments.filter(a => a.type === 'image');
-  const attAudio = _bbAttachments.find(a => a.type === 'audio');
+  const attAudios = _bbAttachments.filter(a => a.type === 'audio');
+  const attAudio = attAudios[0] || null;
   const attLora = _bbAttachments.find(a => a.type === 'lora');
+  const activeTab = getActiveBbTab();
+
+  // Grok and FastH3 video max 15s
+  let jobDuration = bbDuration;
+  if (bbMode === 'video' && (currentVideoModel === 'grok' || currentVideoModel === 'fasth3') && jobDuration > 15) {
+    jobDuration = 15;
+    showToast((currentVideoModel === 'grok' ? 'Grok' : 'FastH3') + ' video max 15s — using 15s', 'warning');
+  }
 
   // Create job snapshot and queue it now so badge shows +1 immediately
   const job = {
     id: Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
     prompt,
+    original_prompt: prompt, // BEFORE enhance — do not overwrite after enhance
     mode: bbMode,
     resolution: bbRes,
     aspect_ratio: bbAr,
-    duration: bbDuration,
+    duration: jobDuration,
+    enhancer_id: bbEnhancer || 'none',
+    image_model: currentImageModel || 'schnell',
+    i2i_model: currentI2iModel || 'klein',
+    video_model: currentVideoModel || 'ltx',
+    ltx_version: currentLtxVersion || '2.3',
+    fasth3_mode: currentFastH3Mode || 'reference',
+    video_upscale: (bbMode === 'video' && bbUpscale) ? 'relayvsr_x2' : 'off',
     attImages: attImages.map(a => ({ id: a.id, name: a.name, type: a.type })),
-    attAudio: attAudio ? { id: attAudio.id, name: attAudio.name, type: attAudio.type } : null,
+    // Grok never sends audio
+    attAudios: (currentVideoModel === 'grok') ? [] : attAudios.map(a => ({ id: a.id, name: a.name, type: a.type })),
+    attAudio: (currentVideoModel === 'grok') ? null : (attAudio ? { id: attAudio.id, name: attAudio.name, type: attAudio.type } : null),
     attLora: attLora ? { id: attLora.id, name: attLora.name, type: attLora.type } : null,
+    h3: (bbMode === 'video' && activeTab && activeTab.h3) ? JSON.parse(JSON.stringify(activeTab.h3)) : null,
+    ltx: (bbMode === 'video' && activeTab && activeTab.ltx) ? JSON.parse(JSON.stringify(activeTab.ltx)) : null,
   };
 
   _genQueue.push(job);
   updateQueueBadge();
   // Keep input and attachments so user can tweak and re-submit
 
-  // Now run enhancement (updates job.prompt already in queue)
-  if (bbEnhancer && bbEnhancer !== 'none' && isOllamaConnected) {
+  // Now run enhancement (updates job.prompt only; original_prompt stays pre-enhance)
+  const structuredH3 = /subject_definitions:/i.test(prompt);
+  if (!structuredH3 && bbEnhancer && bbEnhancer !== 'none' && isOllamaConnected) {
     const enh = bbEnhancersList.find(e => e.id === bbEnhancer);
     if (enh && enh.prompt) {
       try {
@@ -3564,11 +5994,34 @@ async function refreshLibraryFromDB() {
   } catch (_) {}
 }
 
+async function saveGenerationWithGen(job, fields, extraMeta) {
+  const gen = buildGenMetadata(job);
+  const metadata = Object.assign({ gen }, extraMeta || {});
+  const body = Object.assign({}, fields, { metadata });
+  // Drop undefined keys (JSON.stringify does this, but keep body clean)
+  Object.keys(body).forEach(k => { if (body[k] === undefined) delete body[k]; });
+  const saved = await apiPost('/save-generation', body);
+  if (!saved || !saved.success) {
+    console.warn('[save-generation] failed', saved);
+    throw new Error((saved && saved.error) || 'save failed');
+  }
+  return { saved, metadata };
+}
+
 async function runJob(job) {
+  // Ensure arrays always exist
+  if (!Array.isArray(job.attImages)) job.attImages = [];
 
   if (job.mode === 'image') {
     let count;
-    const bodyPayload = { prompt: job.prompt, resolution: job.resolution, aspect_ratio: job.aspect_ratio, mode: 'image' };
+    const bodyPayload = {
+      prompt: job.prompt,
+      resolution: job.resolution,
+      aspect_ratio: job.aspect_ratio,
+      mode: 'image',
+      image_model: job.image_model,
+      i2i_model: job.i2i_model,
+    };
     if (job.attLora) bodyPayload.lora_name = job.attLora.name;
     if (job.attImages.length === 2) {
       count = 1;
@@ -3581,7 +6034,9 @@ async function runJob(job) {
       count = 4;
     }
     bodyPayload.count = count;
+    bodyPayload.job_id = job.id;
     showGenToastPanel(count);
+    const stopProgress = startProgressPolling(job.id, (p) => updateGenToastProgress(p.index ?? 0, p));
 
     try {
       const r = await fetch('/generate/stream', {
@@ -3593,6 +6048,7 @@ async function runJob(job) {
       const decoder = new TextDecoder();
       let buf = '';
       let idx = 0;
+      let lastErr = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -3602,19 +6058,33 @@ async function runJob(job) {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const ev = JSON.parse(line.substring(6));
+          if (ev.type === 'error') {
+            lastErr = ev.error || lastErr || 'Unknown error';
+            continue;
+          }
           if (ev.type === 'image_ready' && idx < count) {
             try {
-              const saved = await apiPost('/save-generation', {
-                prompt: job.prompt, filename: ev.local_filename, type: 'image',
-                aspect_ratio: job.aspect_ratio, width: ev.width || 0, height: ev.height || 0,
-                parent_id: job.attImages.length ? job.attImages[0].id : undefined
+              const { saved, metadata } = await saveGenerationWithGen(job, {
+                prompt: job.prompt,
+                filename: ev.local_filename,
+                type: 'image',
+                aspect_ratio: job.aspect_ratio,
+                width: ev.width || 0,
+                height: ev.height || 0,
+                parent_id: job.attImages.length ? job.attImages[0].id : undefined,
               });
               if (saved && saved.id) {
-                allAssets.unshift({ id: saved.id, type: 'image', filename: ev.local_filename, prompt: job.prompt, width: ev.width || 0, height: ev.height || 0, aspect_ratio: job.aspect_ratio });
+                allAssets.unshift({
+                  id: saved.id, type: 'image', filename: ev.local_filename, prompt: job.prompt,
+                  width: ev.width || 0, height: ev.height || 0, aspect_ratio: job.aspect_ratio,
+                  metadata, parent_id: job.attImages.length ? job.attImages[0].id : null,
+                });
                 _libCache.assets = allAssets;
                 _libCache.childrenMap = buildChildrenMap(allAssets);
               }
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[runJob] image save failed', err);
+            }
             const badge = ev.width && ev.height ? `${ev.width}x${ev.height}` : '';
             const html = `<img src="/images/${ev.local_filename}" loading="lazy">${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
             fillGenToastCard(idx, html, () => refreshLibraryFromDB());
@@ -3625,18 +6095,71 @@ async function runJob(job) {
       // Final library sync from DB once all results are in
       if (idx > 0) await refreshLibraryFromDB();
       if (idx === 0) {
-        showToast('Generation returned no results', 'error');
+        showToast(lastErr || 'Generation returned no results', 'error');
         cleanupGenToast();
       }
     } catch (e) {
       showToast('Generation failed: ' + e.message, 'error');
       cleanupGenToast();
+    } finally {
+      stopProgress();
+    }
+  } else if (job.mode === 'speech') {
+    const v = job.attVoice || {};
+    const sp = job.speech || {};
+    showGenToastPanel(1);
+    const stopProgress = startProgressPolling(job.id, (p) => updateGenToastProgress(0, p));
+    try {
+      const res = await apiPost('/tts/generate', {
+        text: job.prompt, voice_id: v.id || '', voice_filename: v.name || '',
+        engine: sp.engine || 'qwen3', language: sp.language || 'English',
+        emotion: sp.emotion || 'neutral', instruction: sp.instruction || '',
+        ref_text: sp.ref_text || '', seed: Number(sp.seed) || 0, job_id: job.id,
+      });
+      if (res && res.success) {
+        const label = String(res.name || job.prompt || 'Speech').trim();
+        const preview = label.length > 90 ? label.slice(0, 90) + '...' : label;
+        const dur = res.duration ? `<span style="font-size:9px;opacity:0.7">${Number(res.duration).toFixed(1)}s</span>` : '';
+        fillGenToastCard(0, `
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:100%;height:100%;padding:8px;box-sizing:border-box;color:#fff;background:#0b0b0b">
+            <i class="fa-solid fa-microphone-lines" style="font-size:18px;color:#a78bfa"></i>
+            <div style="font-size:10px;line-height:1.3;text-align:center;max-width:100%;word-break:break-word">${escHtml(preview)}</div>
+            ${dur}
+            <audio controls src="/audio/${encodeURIComponent(res.filename)}" style="width:100%;height:30px"></audio>
+          </div>`, () => refreshLibraryFromDB(), 6000);
+        await refreshLibraryFromDB();
+        showToast('Speech saved to Audio');
+      } else {
+        showToast((res && res.error) || 'Speech generation failed', 'error');
+        cleanupGenToast();
+      }
+    } catch (e) {
+      showToast('Speech generation failed: ' + e.message, 'error');
+      cleanupGenToast();
+    } finally {
+      stopProgress();
     }
   } else {
     // Video mode
     showGenToastPanel(1);
 
-    const vidPayload = { prompt: job.prompt, resolution: job.resolution, aspect_ratio: job.aspect_ratio, mode: 'video', duration: job.duration };
+    const vidPayload = {
+      prompt: job.prompt,
+      resolution: job.resolution,
+      aspect_ratio: job.aspect_ratio,
+      mode: 'video',
+      duration: job.duration,
+      image_model: job.image_model,
+      i2i_model: job.i2i_model,
+      video_model: job.video_model || currentVideoModel || 'ltx',
+      ltx_version: job.ltx_version || currentLtxVersion || '2.3',
+      fasth3_mode: job.fasth3_mode || currentFastH3Mode || 'reference',
+      video_upscale: job.video_upscale || 'off',
+    };
+    const currentTab = getActiveBbTab();
+    if (currentTab && currentTab.ltx && currentTab.ltx.enabled) {
+      vidPayload.disable_prompt_enhance = true;
+    }
     if (job.attLora) vidPayload.lora_name = job.attLora.name;
     if (job.attAudio && job.attImages.length === 1) {
       vidPayload.source_image = job.attImages[0].name;
@@ -3644,38 +6167,76 @@ async function runJob(job) {
     } else if (job.attImages.length === 1) {
       vidPayload.source_image = job.attImages[0].name;
     }
+    // FastH3 multi-reference: send all images/audios in attachment order
+    if ((job.video_model || currentVideoModel) === 'fasth3') {
+      if (job.attImages && job.attImages.length) {
+        vidPayload.ref_images = job.attImages.map(a => a.name);
+      }
+      const auds = job.attAudios || [];
+      if (auds.length) {
+        vidPayload.ref_audios = auds.map(a => a.name);
+      }
+    }
+    vidPayload.job_id = job.id;
+    const stopProgress = startProgressPolling(job.id, (p) => updateGenToastProgress(0, p), { stopOnFinished: false });
     try {
       const res = await apiPost('/generate', vidPayload);
       if (res.success && res.results) {
+        let anyOk = false;
+        let lastVidErr = '';
         for (let idx = 0; idx < res.results.length; idx++) {
           const r = res.results[idx];
           if (r.success) {
+            anyOk = true;
+            job.upscale = r.upscale || null;
             try {
-              const saved = await apiPost('/save-generation', {
-                prompt: job.prompt, filename: r.local_filename, type: 'video',
-                aspect_ratio: job.aspect_ratio, width: r.width || 0, height: r.height || 0,
+              const { saved, metadata } = await saveGenerationWithGen(job, {
+                prompt: job.prompt,
+                filename: r.local_filename,
+                type: 'video',
+                aspect_ratio: job.aspect_ratio,
+                width: r.width || 0,
+                height: r.height || 0,
                 duration: r.duration || null,
-                parent_id: job.attImages.length ? job.attImages[0].id : undefined
+                parent_id: job.attImages.length ? job.attImages[0].id : undefined,
               });
               if (saved && saved.id) {
-                allAssets.unshift({ id: saved.id, type: 'video', filename: r.local_filename, prompt: job.prompt, width: r.width || 0, height: r.height || 0, duration: r.duration, aspect_ratio: job.aspect_ratio });
+                allAssets.unshift({
+                  id: saved.id, type: 'video', filename: r.local_filename, prompt: job.prompt,
+                  width: r.width || 0, height: r.height || 0, duration: r.duration,
+                  aspect_ratio: job.aspect_ratio, metadata,
+                  parent_id: job.attImages.length ? job.attImages[0].id : null,
+                });
                 _libCache.assets = allAssets;
                 _libCache.childrenMap = buildChildrenMap(allAssets);
               }
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[runJob] video save failed', err);
+            }
+            if (r.upscale && r.upscale.status === 'failed') {
+              showToast('Upscale failed — original video saved', 'warning');
+            }
             const badge = r.duration ? `${r.duration}s` : '';
             const html = `<video src="/videos/${r.local_filename}" muted loop autoplay playsinline style="width:100%;height:100%;object-fit:cover"></video>${badge ? `<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.7);color:#ccc;font-size:9px;padding:1px 4px;border-radius:2px;line-height:1.4">${badge}</div>` : ''}`;
             fillGenToastCard(idx, html, () => refreshLibraryFromDB());
+          } else {
+            lastVidErr = r.error || lastVidErr || 'Unknown error';
           }
         }
-        await refreshLibraryFromDB();
+        if (anyOk) await refreshLibraryFromDB();
+        else {
+          showToast(lastVidErr || 'Video generation failed', 'error');
+          cleanupGenToast();
+        }
       } else {
-        showToast('Video generation failed', 'error');
+        showToast((res && res.error) || 'Video generation failed', 'error');
         cleanupGenToast();
       }
     } catch (e) {
       showToast('Generation failed: ' + e.message, 'error');
       cleanupGenToast();
+    } finally {
+      stopProgress();
     }
   }
 }
@@ -4044,6 +6605,8 @@ function openLibraryEditor() {
             <span style="flex:1;font-size:11px;font-weight:500;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.prompt || a.filename || a.id)}</span>
             ${badge ? `<span style="font-size:9px;color:#999;white-space:nowrap;flex-shrink:0">${badge}</span>` : ''}
             <span class="le-fav" data-id="${a.id}" data-fav="${a.favorite ? '1' : '0'}" style="cursor:pointer;font-size:11px;flex-shrink:0;width:18px;text-align:center;color:${a.favorite ? '#facc15' : '#ccc'};pointer-events:auto">${a.favorite ? '<i class="fa-solid fa-star"></i>' : '<i class="fa-regular fa-star"></i>'}</span>
+            ${(!isVideo && !isAudio) ? `<span class="le-char" data-id="${a.id}" data-char="${a.character ? '1' : '0'}" style="cursor:pointer;font-size:11px;flex-shrink:0;width:18px;text-align:center;color:${a.character ? '#38bdf8' : '#ccc'};pointer-events:auto">${a.character ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-regular fa-user"></i>'}</span>` : ''}
+            ${isAudio ? `<span class="le-voice" data-id="${a.id}" data-voice="${a.voice ? '1' : '0'}" style="cursor:pointer;font-size:11px;flex-shrink:0;width:18px;text-align:center;color:${a.voice ? '#a78bfa' : '#ccc'};pointer-events:auto">${a.voice ? '<i class="fa-solid fa-microphone"></i>' : '<i class="fa-regular fa-microphone"></i>'}</span>` : ''}
             <span class="le-del" data-id="${a.id}" style="cursor:pointer;font-size:10px;flex-shrink:0;width:18px;text-align:center;color:#ef4444;pointer-events:auto"><i class="fa-solid fa-trash-can"></i></span>
           </div>
           <div class="le-children" id="le-${uid}" style="display:none;padding:2px 0 4px 0">`;
@@ -4072,7 +6635,7 @@ function openLibraryEditor() {
       // Toggle item expand/collapse
       body.querySelectorAll('.le-toggle').forEach(toggle => {
         toggle.addEventListener('click', e => {
-          if (e.target.closest('.le-fav') || e.target.closest('.le-del')) return;
+          if (e.target.closest('.le-fav') || e.target.closest('.le-char') || e.target.closest('.le-voice') || e.target.closest('.le-del')) return;
           const target = document.getElementById('le-' + toggle.dataset.target);
           const arrow = toggle.querySelector('.le-arrow');
           if (target) {
@@ -4107,6 +6670,39 @@ function openLibraryEditor() {
             el.dataset.fav = fav ? '1' : '0';
             el.style.color = fav ? '#facc15' : '#ccc';
             el.innerHTML = fav ? '<i class="fa-solid fa-star"></i>' : '<i class="fa-regular fa-star"></i>';
+            refreshLibraryScrollPreserved(document.querySelector('[id^="win-"]')?.id);
+          } catch (_) {}
+        });
+      });
+
+      // Character toggle
+      body.querySelectorAll('.le-char').forEach(el => {
+        el.addEventListener('click', async e => {
+          e.stopPropagation();
+          const id = el.dataset.id;
+          const isChar = el.dataset.char === '1' ? false : true;
+          try {
+            await apiPost('/admin/update-generation', { id, character: isChar });
+            el.dataset.char = isChar ? '1' : '0';
+            el.style.color = isChar ? '#38bdf8' : '#ccc';
+            el.innerHTML = isChar ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-regular fa-user"></i>';
+            refreshLibraryScrollPreserved(document.querySelector('[id^="win-"]')?.id);
+          } catch (_) {}
+        });
+      });
+
+      // Voice toggle
+      body.querySelectorAll('.le-voice').forEach(el => {
+        el.addEventListener('click', async e => {
+          e.stopPropagation();
+          const id = el.dataset.id;
+          const isVoice = el.dataset.voice === '1' ? false : true;
+          try {
+            const res = await apiPost('/admin/update-generation', { id, voice: isVoice });
+            const nextVoice = (res && typeof res.voice === 'boolean') ? res.voice : isVoice;
+            el.dataset.voice = nextVoice ? '1' : '0';
+            el.style.color = nextVoice ? '#a78bfa' : '#ccc';
+            el.innerHTML = nextVoice ? '<i class="fa-solid fa-microphone"></i>' : '<i class="fa-regular fa-microphone"></i>';
             refreshLibraryScrollPreserved(document.querySelector('[id^="win-"]')?.id);
           } catch (_) {}
         });
@@ -4163,6 +6759,7 @@ function openLibraryEditor() {
               height: value.height !== undefined ? Number(value.height) : undefined,
               aspect_ratio: value.aspect_ratio !== undefined ? String(value.aspect_ratio) : undefined,
               duration: value.duration !== undefined ? Number(value.duration) : undefined,
+              voice: value.voice !== undefined ? Boolean(value.voice) : undefined,
               parent_id: value.parent_id !== undefined ? String(value.parent_id) : undefined,
               metadata: value.metadata !== undefined ? (typeof value.metadata === 'object' ? JSON.stringify(value.metadata) : String(value.metadata)) : undefined
             });
@@ -4184,1302 +6781,1269 @@ function openLibraryEditor() {
   })();
 }
 
-function openChatHistoryEditor() {
-  const wid = createWindow({ title: 'Chat History Editor', icon: 'fa-comments', width: 800, height: 550, stateKey: 'ChatHistoryEditor' });
+// ============================================================
+// APP: Music Video
+// ============================================================
+function openMusicVideo() {
+  const wid = createWindow({ title: 'Music Video', icon: 'fa-music', width: 1180, height: 760, stateKey: 'MusicVideo' });
   const el = document.getElementById(wid);
   const body = el.querySelector('.window-body');
-  body.style.background = '#fff';
-  body.style.padding = '0';
-  body.innerHTML = '<div style="padding:20px;text-align:center;color:#888"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
-
-  (async () => {
-    let sessions = [];
-
-    function saveCEState() {
-      const openNodes = new Set();
-      document.querySelectorAll('[id^="ce-"]').forEach(el => {
-        if (el.style.display === 'block') openNodes.add(el.id.replace('ce-', ''));
-      });
-      const seOpen = new Set();
-      document.querySelectorAll('[id^="se-"]').forEach(el => {
-        if (el.style.display === 'block') seOpen.add(el.id.replace('se-', ''));
-      });
-      return { openNodes, seOpen, scrollTop: document.getElementById('ce-scroll')?.scrollTop || 0 };
-    }
-
-    function restoreCEState(state) {
-      state.openNodes.forEach(uid => {
-        const el = document.getElementById('ce-' + uid);
-        if (el) el.style.display = 'block';
-        const toggle = document.querySelector(`.ce-toggle[data-target="${CSS.escape(uid)}"]`);
-        if (toggle) {
-          const arrow = toggle.querySelector('.ce-arrow');
-          if (arrow) arrow.innerHTML = '&#9660;';
-        }
-      });
-      state.seOpen.forEach(uid => {
-        const el = document.getElementById('se-' + uid);
-        if (el) el.style.display = 'block';
-        const toggle = document.querySelector(`.se-toggle[data-target="${CSS.escape(uid)}"]`);
-        if (toggle) {
-          const arrow = toggle.querySelector('.se-arrow');
-          if (arrow) arrow.innerHTML = '&#9660;';
-        }
-      });
-    }
-
-    function renderCE(savedState) {
-      if (!savedState) savedState = saveCEState();
-      let html = `
-        <div style="display:flex;flex-direction:column;height:100%">
-          <div id="ce-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:8px 0 8px 10px">`;
-
-      sessions.forEach((s, i) => {
-        const uid = uidFromPath(s.id || String(i));
-        const msgCount = (s.messages || []).length;
-        const dateStr = s.created ? new Date(s.created).toLocaleDateString() : '';
-        html += `<div data-ce-item="${uid}" style="margin-bottom:2px">
-          <div class="ce-toggle" data-target="${uid}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;user-select:none;border-radius:4px;background:${i % 2 === 0 ? '#f9fafb' : '#fff'};border:1px solid #e5e7eb">
-            <span class="ce-arrow" style="font-size:8px;color:#888;width:10px;text-align:center">&#9654;</span>
-            <i class="fa-solid fa-comments" style="color:#6366f1;font-size:12px;width:16px;text-align:center;flex-shrink:0"></i>
-            <span style="flex:1;font-size:11px;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.title || 'Untitled')}</span>
-            <span style="font-size:10px;color:#999;white-space:nowrap;flex-shrink:0">${msgCount} msgs${dateStr ? ' \u2022 ' + dateStr : ''}</span>
-            <span class="ce-del" data-sid="${s.id}" style="cursor:pointer;font-size:10px;flex-shrink:0;width:18px;text-align:center;color:#ef4444;pointer-events:auto"><i class="fa-solid fa-trash-can"></i></span>
-          </div>
-          <div class="ce-children" id="ce-${uid}" style="display:none;padding:2px 0 4px 0">`;
-
-        html += renderTreeValue(s.id || String(i), s, s.id || String(i), 0);
-
-        html += `</div></div>`;
-      });
-
-      html += `
-          </div>
-          <div style="padding:10px 16px;border-top:1px solid #e0e0e0;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0">
-            <div style="display:flex;align-items:center;gap:8px">
-              <button id="ce-refresh" class="server-save-btn" style="display:flex;align-items:center;gap:6px"><i class="fa-solid fa-rotate"></i> Refresh</button>
-              <span style="font-size:11px;color:#888">${sessions.length} sessions</span>
-            </div>
-            <button id="ce-save-all" class="server-save-btn">Save All Changes</button>
-          </div>
-        </div>`;
-      body.innerHTML = html;
-      const scrollEl = document.getElementById('ce-scroll');
-      if (scrollEl) scrollEl.scrollTop = savedState.scrollTop;
-      restoreCEState(savedState);
-
-      body.querySelectorAll('.ce-toggle').forEach(toggle => {
-        toggle.addEventListener('click', e => {
-          if (e.target.closest('.ce-del')) return;
-          const target = document.getElementById('ce-' + toggle.dataset.target);
-          const arrow = toggle.querySelector('.ce-arrow');
-          if (target) {
-            const isOpen = target.style.display !== 'none';
-            target.style.display = isOpen ? 'none' : 'block';
-            arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
-          }
-        });
-      });
-
-      // Tree node toggle (from renderTreeValue)
-      body.querySelectorAll('.se-toggle').forEach(toggle => {
-        toggle.addEventListener('click', () => {
-          const target = document.getElementById('se-' + toggle.dataset.target);
-          const arrow = toggle.querySelector('.se-arrow');
-          if (target) {
-            const isOpen = target.style.display !== 'none';
-            target.style.display = isOpen ? 'none' : 'block';
-            arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
-          }
-        });
-      });
-
-      // Delete
-      body.querySelectorAll('.ce-del').forEach(el => {
-        el.addEventListener('click', async e => {
-          e.stopPropagation();
-          const sid = el.dataset.sid;
-          if (!sid || !confirm('Delete this chat session?')) return;
-          try {
-            const icon = el.querySelector('i');
-            if (icon) icon.classList.add('fa-spin');
-            await apiPost('/admin/delete-chat-session', { id: sid });
-            sessions = sessions.filter(s => s.id !== sid);
-            renderCE(saveCEState());
-          } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
-        });
-      });
-
-      // Refresh
-      document.getElementById('ce-refresh').onclick = async () => {
-        const icon = document.querySelector('#ce-refresh i');
-        icon.classList.add('fa-spin');
-        const state = saveCEState();
-        try {
-          const res = await apiGet('/admin/chat-sessions');
-          sessions = res.sessions || [];
-          renderCE(state);
-        } catch (e) {
-          showToast('Refresh failed: ' + e.message, 'error');
-        } finally {
-          icon.classList.remove('fa-spin');
-        }
-      };
-
-      // Save
-      document.getElementById('ce-save-all').onclick = async () => {
-        let count = 0;
-        for (const s of sessions) {
-          const value = reconstructValueFromTree(s.id, body);
-          if (!value || typeof value !== 'object') continue;
-          try {
-            if (value.title !== undefined && value.title !== s.title) {
-              await apiPost('/admin/update-chat-session', { id: s.id, key: 'title', value: String(value.title) });
-              count++;
-            }
-            if (value.messages !== undefined) {
-              await apiPost('/admin/update-chat-session', { id: s.id, key: 'messages', value: JSON.stringify(value.messages) });
-              count++;
-            }
-          } catch (_) {}
-        }
-        showToast('Saved ' + count + ' changes', 'success');
-      };
-    }
-
-    try {
-      const res = await apiGet('/admin/chat-sessions');
-      sessions = res.sessions || [];
-      renderCE();
-    } catch (e) {
-      body.innerHTML = '<div style="padding:40px;text-align:center;color:#ef4444">Failed to load: ' + e.message + '</div>';
-    }
-  })();
-}
-
-function openDirectorDataEditor() {
-  const wid = createWindow({ title: 'Director Data Editor', icon: 'fa-clapperboard', width: 800, height: 550, stateKey: 'DirectorDataEditor' });
-  const el = document.getElementById(wid);
-  const body = el.querySelector('.window-body');
-  body.style.background = '#fff';
-  body.style.padding = '0';
-  body.innerHTML = '<div style="padding:20px;text-align:center;color:#888"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
-
-  (async () => {
-    let sessions = [];
-
-    function saveDEState() {
-      const openNodes = new Set();
-      document.querySelectorAll('[id^="de-"]').forEach(el => {
-        if (el.style.display === 'block') openNodes.add(el.id.replace('de-', ''));
-      });
-      const seOpen = new Set();
-      document.querySelectorAll('[id^="se-"]').forEach(el => {
-        if (el.style.display === 'block') seOpen.add(el.id.replace('se-', ''));
-      });
-      return { openNodes, seOpen, scrollTop: document.getElementById('de-scroll')?.scrollTop || 0 };
-    }
-
-    function restoreDEState(state) {
-      state.openNodes.forEach(uid => {
-        const el = document.getElementById('de-' + uid);
-        if (el) el.style.display = 'block';
-        const toggle = document.querySelector(`.de-toggle[data-target="${CSS.escape(uid)}"]`);
-        if (toggle) {
-          const arrow = toggle.querySelector('.de-arrow');
-          if (arrow) arrow.innerHTML = '&#9660;';
-        }
-      });
-      state.seOpen.forEach(uid => {
-        const el = document.getElementById('se-' + uid);
-        if (el) el.style.display = 'block';
-        const toggle = document.querySelector(`.se-toggle[data-target="${CSS.escape(uid)}"]`);
-        if (toggle) {
-          const arrow = toggle.querySelector('.se-arrow');
-          if (arrow) arrow.innerHTML = '&#9660;';
-        }
-      });
-    }
-
-    function renderDE(savedState) {
-      if (!savedState) savedState = saveDEState();
-      let html = `
-        <div style="display:flex;flex-direction:column;height:100%">
-          <div id="de-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:8px 0 8px 10px">`;
-
-      sessions.forEach((s, i) => {
-        const uid = uidFromPath(s.id || String(i));
-        const sceneCount = (s.scenes || []).length;
-        const msgCount = (s.messages || []).length;
-        const dateStr = s.created ? new Date(s.created).toLocaleDateString() : '';
-        html += `<div data-de-item="${uid}" style="margin-bottom:2px">
-          <div class="de-toggle" data-target="${uid}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;user-select:none;border-radius:4px;background:${i % 2 === 0 ? '#f9fafb' : '#fff'};border:1px solid #e5e7eb">
-            <span class="de-arrow" style="font-size:8px;color:#888;width:10px;text-align:center">&#9654;</span>
-            <i class="fa-solid fa-clapperboard" style="color:#6366f1;font-size:12px;width:16px;text-align:center;flex-shrink:0"></i>
-            <span style="flex:1;font-size:11px;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.title || 'Untitled')}</span>
-            <span style="font-size:10px;color:#999;white-space:nowrap;flex-shrink:0">${sceneCount} scenes, ${msgCount} msgs${dateStr ? ' \u2022 ' + dateStr : ''}</span>
-            <span class="de-del" data-sid="${s.id}" style="cursor:pointer;font-size:10px;flex-shrink:0;width:18px;text-align:center;color:#ef4444;pointer-events:auto"><i class="fa-solid fa-trash-can"></i></span>
-          </div>
-          <div class="de-children" id="de-${uid}" style="display:none;padding:2px 0 4px 0">`;
-
-        html += renderTreeValue(s.id || String(i), s, s.id || String(i), 0);
-
-        html += `</div></div>`;
-      });
-
-      html += `
-          </div>
-          <div style="padding:10px 16px;border-top:1px solid #e0e0e0;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0">
-            <div style="display:flex;align-items:center;gap:8px">
-              <button id="de-refresh" class="server-save-btn" style="display:flex;align-items:center;gap:6px"><i class="fa-solid fa-rotate"></i> Refresh</button>
-              <span style="font-size:11px;color:#888">${sessions.length} sessions</span>
-            </div>
-            <button id="de-save-all" class="server-save-btn">Save All Changes</button>
-          </div>
-        </div>`;
-      body.innerHTML = html;
-      const scrollEl = document.getElementById('de-scroll');
-      if (scrollEl) scrollEl.scrollTop = savedState.scrollTop;
-      restoreDEState(savedState);
-
-      body.querySelectorAll('.de-toggle').forEach(toggle => {
-        toggle.addEventListener('click', e => {
-          if (e.target.closest('.de-del')) return;
-          const target = document.getElementById('de-' + toggle.dataset.target);
-          const arrow = toggle.querySelector('.de-arrow');
-          if (target) {
-            const isOpen = target.style.display !== 'none';
-            target.style.display = isOpen ? 'none' : 'block';
-            arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
-          }
-        });
-      });
-
-      body.querySelectorAll('.se-toggle').forEach(toggle => {
-        toggle.addEventListener('click', () => {
-          const target = document.getElementById('se-' + toggle.dataset.target);
-          const arrow = toggle.querySelector('.se-arrow');
-          if (target) {
-            const isOpen = target.style.display !== 'none';
-            target.style.display = isOpen ? 'none' : 'block';
-            arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
-          }
-        });
-      });
-
-      body.querySelectorAll('.de-del').forEach(el => {
-        el.addEventListener('click', async e => {
-          e.stopPropagation();
-          const sid = el.dataset.sid;
-          if (!sid || !confirm('Delete this director session?')) return;
-          try {
-            const icon = el.querySelector('i');
-            if (icon) icon.classList.add('fa-spin');
-            await apiPost('/admin/delete-director-session', { id: sid });
-            sessions = sessions.filter(s => s.id !== sid);
-            renderDE(saveDEState());
-          } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
-        });
-      });
-
-      document.getElementById('de-refresh').onclick = async () => {
-        const icon = document.querySelector('#de-refresh i');
-        icon.classList.add('fa-spin');
-        const state = saveDEState();
-        try {
-          const res = await apiGet('/admin/director-sessions');
-          sessions = res.sessions || [];
-          renderDE(state);
-        } catch (e) {
-          showToast('Refresh failed: ' + e.message, 'error');
-        } finally {
-          icon.classList.remove('fa-spin');
-        }
-      };
-
-      document.getElementById('de-save-all').onclick = async () => {
-        let count = 0;
-        for (const s of sessions) {
-          const value = reconstructValueFromTree(s.id, body);
-          if (!value || typeof value !== 'object') continue;
-          try {
-            if (value.title !== undefined && value.title !== s.title) {
-              await apiPost('/admin/update-director-session', { id: s.id, key: 'title', value: String(value.title) });
-              count++;
-            }
-            if (value.settings !== undefined && value.settings !== s.settings) {
-              await apiPost('/admin/update-director-session', { id: s.id, key: 'settings', value: typeof value.settings === 'object' ? JSON.stringify(value.settings) : String(value.settings) });
-              count++;
-            }
-            if (value.scenes !== undefined) {
-              await apiPost('/admin/update-director-session', { id: s.id, key: 'scenes', value: JSON.stringify(value.scenes) });
-              count++;
-            }
-            if (value.messages !== undefined) {
-              await apiPost('/admin/update-director-session', { id: s.id, key: 'messages', value: JSON.stringify(value.messages) });
-              count++;
-            }
-          } catch (_) {}
-        }
-        showToast('Saved ' + count + ' changes', 'success');
-      };
-    }
-
-    try {
-      const res = await apiGet('/admin/director-sessions');
-      sessions = res.sessions || [];
-      renderDE();
-    } catch (e) {
-      body.innerHTML = '<div style="padding:40px;text-align:center;color:#ef4444">Failed to load: ' + e.message + '</div>';
-    }
-  })();
-}
-
-function openDirector() {
-  const wid = createWindow({ title: 'Director', icon: 'fa-clapperboard', width: 900, height: 650, stateKey: 'Director' });
-  const el = document.getElementById(wid);
-  const body = el.querySelector('.window-body');
-  body.style.background = 'var(--chat-bg)';
+  body.style.background = 'var(--bg-window-light, #f5f5f5)';
   body.style.padding = '0';
   body.style.display = 'flex';
   body.style.flexDirection = 'column';
+  body.style.overflow = 'hidden';
 
-  let currentSessionId = null;
-  let settings = { aspect_ratio: typeof bbAr !== 'undefined' ? bbAr : '16:9', resolution: typeof bbRes !== 'undefined' ? bbRes : '720p', duration: 6, loras: [], image_model: typeof currentImageModel !== 'undefined' ? currentImageModel : 'schnell' };
-  let directorMessages = [];
-  let directorScenes = [];
-  let drAttachments = [];
-  let directorSessions = [];
+  let projects = [];
+  let currentProjectId = null;
+  let currentProject = null;
+  let audioDuration = null;
+  let busySegments = {};
+  let batchState = { active: false, paused: false, cancelled: false, mode: null, slotId: null, current: 0, total: 0, label: '' };
 
-  let lastDebugMessages = null;
-  let debugActiveTab = 'system';
+  const RES_OPTIONS = ['480p', '720p', '1080p'];
+  const AR_OPTIONS = ['3:2', '16:9', '1:1', '9:16', '2:3'];
 
-  const style = document.createElement('style');
-  style.textContent = `
-    .dr-pills { display:flex; gap:6px; padding:6px 12px; background:var(--chat-bar-bg, #f0f0f0); border-bottom:1px solid var(--chat-bar-border, #ddd); flex-wrap:wrap; flex-shrink:0; }
-    .dr-pill { display:flex; align-items:center; gap:4px; padding:3px 10px; border-radius:12px; border:1px solid var(--chat-bar-border, #ddd); background:var(--chat-btn-bg, #fff); color:var(--chat-input-color, #333); font-size:11px; cursor:pointer; transition:all 0.15s; white-space:nowrap; }
-    .dr-pill:hover { border-color:var(--accent, #6366f1); color:var(--accent, #6366f1); }
-    .dr-pill i { font-size:9px; opacity:0.6; }
-    .dr-timeline { display:flex; gap:8px; padding:8px 12px; overflow-x:auto; flex-shrink:0; background:var(--chat-bar-bg, #f0f0f0); border-bottom:1px solid var(--chat-bar-border, #ddd); min-height:80px; align-items:stretch; }
-    .dr-scene-card { flex-shrink:0; width:100px; background:var(--chat-btn-bg, #fff); border:1px solid var(--chat-bar-border, #ddd); border-radius:8px; padding:4px; display:flex; flex-direction:column; gap:3px; position:relative; }
-    .dr-scene-card .sc-lora { font-size:8px; color:var(--accent, #6366f1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:1px 2px; }
-    .dr-scene-card .sc-header { display:flex; justify-content:space-between; align-items:center; font-size:9px; color:var(--chat-muted, #888); }
-    .dr-scene-card .sc-header .sc-num { font-weight:600; color:var(--accent, #6366f1); }
-    .dr-scene-card .sc-title { font-size:10px; font-weight:500; color:var(--chat-input-color, #333); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .dr-scene-card .sc-thumb { width:100%; aspect-ratio:16/9; border-radius:3px; overflow:hidden; background:var(--chat-bg, #f5f5f7); display:flex; align-items:center; justify-content:center; position:relative; }
-    .dr-scene-card .sc-thumb img { width:100%; height:100%; object-fit:cover; }
-    .dr-scene-card .sc-thumb .sc-pending { font-size:9px; color:var(--chat-muted, #888); }
-    .dr-scene-card .sc-actions { display:flex; gap:2px; justify-content:flex-end; }
-    .dr-scene-card .sc-actions button { padding:1px 4px; font-size:8px; border-radius:3px; border:1px solid var(--chat-bar-border, #ddd); background:var(--chat-btn-bg, #fff); color:var(--chat-muted, #666); cursor:pointer; }
-    .dr-scene-card .sc-actions button:hover { border-color:var(--accent, #6366f1); color:var(--accent, #6366f1); }
-    .dr-scene-card .sc-actions .sc-del { color:#f87171; }
-    .dr-scene-card .sc-actions .sc-del:hover { border-color:#f87171; }
-    .dr-attachments { display:flex; gap:6px; padding:6px 12px; flex-shrink:0; background:var(--chat-bar-bg, #f0f0f0); border-top:1px solid var(--chat-bar-border, #ddd); overflow-x:auto; min-height:44px; align-items:center; }
-    .dr-att { display:flex; align-items:center; gap:4px; padding:2px 6px; border-radius:6px; border:1px solid var(--chat-bar-border, #ddd); background:var(--chat-btn-bg, #fff); font-size:11px; flex-shrink:0; }
-    .dr-att img { width:32px; height:24px; object-fit:cover; border-radius:3px; }
-    .dr-att .dr-att-trash { cursor:pointer; color:var(--chat-muted, #888); padding:2px; font-size:10px; }
-    .dr-att .dr-att-trash:hover { color:#f87171; }
-    .dr-scene-card .sc-gen-progress { font-size:8px; color:var(--accent, #6366f1); text-align:center; padding:1px 0; }
-    .dr-sess-time { font-size:9px; opacity:0.5; flex-shrink:0; }
-    #dr-sess-list .ch-del { position:absolute; top:2px; right:2px; opacity:1; width:18px; height:18px; font-size:10px; background:var(--danger-bg,rgba(220,38,38,0.15)); color:var(--danger-text,#ef4444); z-index:2; }
-    #dr-sess-list .ch-del:hover { background:var(--danger-text,#ef4444); color:#fff; }
-    .dr-debug-toggle { display:flex; align-items:center; gap:4px; padding:3px 8px; font-size:10px; cursor:pointer; color:var(--text-secondary, #888); flex-shrink:0; border:none; background:transparent; }
-    .dr-debug-toggle:hover { color:var(--accent, #6366f1); }
-    .dr-debug-panel { display:none; flex-direction:column; flex-shrink:0; max-height:200px; border-top:1px solid var(--cp-border, #ddd); background:var(--window-bg, #fff); font-size:10px; font-family:monospace; overflow:hidden; }
-    .dr-debug-panel.open { display:flex; }
-    .dr-debug-tabs { display:flex; gap:0; flex-shrink:0; border-bottom:1px solid var(--cp-border, #ddd); }
-    .dr-debug-tab { padding:4px 10px; cursor:pointer; color:var(--text-secondary, #888); border-bottom:2px solid transparent; font-size:10px; }
-    .dr-debug-tab.active { color:var(--text-primary, #333); border-color:var(--accent, #6366f1); }
-    .dr-debug-content { flex:1; overflow:auto; padding:6px 8px; white-space:pre-wrap; word-break:break-all; user-select:text; }
-    .dr-debug-copy { padding:2px 6px; font-size:9px; cursor:pointer; color:var(--text-secondary,#888); background:transparent; border:1px solid var(--cp-border,#ddd); border-radius:3px; margin-left:auto; }
-    .dr-debug-copy:hover { color:var(--accent,#6366f1); border-color:var(--accent,#6366f1); }
-    .dr-pills select { font-size:11px; padding:2px 6px; border-radius:6px; border:1px solid var(--chat-bar-border,#ddd); background:var(--chat-btn-bg,#fff); color:var(--chat-input-color,#333); cursor:pointer; }
-    .dr-pills select:focus { outline:none; border-color:var(--accent,#6366f1); }
-    .dr-pills select:hover { border-color:var(--accent,#6366f1); }
-  `;
-  // === Settings pills ===
-  function renderSettingsPills() {
-    const bar = document.getElementById('dr-pills');
-    if (!bar) return;
-    let loraChips = '';
-    if (settings.loras && settings.loras.length) {
-      loraChips = settings.loras.map(l => {
-        const name = typeof l === 'string' ? l : l.name || '';
-        return '<span class="dr-pill dr-lora-chip" style="color:var(--accent,#6366f1);border-color:var(--accent,#6366f1)"><i class="fa-solid fa-layer-group"></i> ' + escHtml(name.split('.')[0]) + ' <span class="dr-lora-rm" data-lora="' + escHtml(name) + '" style="margin-left:4px;cursor:pointer;opacity:0.6">✕</span></span>';
-      }).join('');
-    }
-    const ratios = ['16:9', '3:2', '1:1', '9:16', '2:3', '4:3'];
-    const resolutions = ['480p', '720p', '1080p'];
-    const durations = [1,2,3,4,5,6,7,8,9,10,15,20,30,40,50,60];
-    bar.innerHTML = `
-      <select id="dr-ar-select" title="Aspect Ratio"><option disabled>AR</option>${ratios.map(r => '<option value="' + r + '"' + (settings.aspect_ratio === r ? ' selected' : '') + '>' + r + '</option>').join('')}</select>
-      <select id="dr-res-select" title="Resolution"><option disabled>Res</option>${resolutions.map(r => '<option value="' + r + '"' + (settings.resolution === r ? ' selected' : '') + '>' + r + '</option>').join('')}</select>
-      <select id="dr-dur-select" title="Duration per scene (seconds)"><option disabled>Dur</option>${durations.map(d => '<option value="' + d + '"' + ((settings.duration || 6) === d ? ' selected' : '') + '>' + d + 's</option>').join('')}</select>
-      ${loraChips}
-    `;
-    bar.querySelectorAll('.dr-lora-rm').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const name = el.dataset.lora;
-        settings.loras = settings.loras.filter(l => (typeof l === 'string' ? l : l.name) !== name);
-        renderSettingsPills();
-        saveSettings();
-      });
-    });
-    document.getElementById('dr-ar-select')?.addEventListener('change', (e) => {
-      settings.aspect_ratio = e.target.value;
-      renderSettingsPills();
-      saveSettings();
-    });
-    document.getElementById('dr-res-select')?.addEventListener('change', (e) => {
-      settings.resolution = e.target.value;
-      renderSettingsPills();
-      saveSettings();
-    });
-    document.getElementById('dr-dur-select')?.addEventListener('change', (e) => {
-      settings.duration = parseInt(e.target.value) || 6;
-      renderSettingsPills();
-      saveSettings();
-    });
+  const SECTION_NAMES = [
+    'Intro', 'Verse 1', 'Pre Chorus 1', 'Chorus 1',
+    'Verse 2', 'Pre Chorus 2', 'Chorus 2',
+    'Verse 3', 'Pre Chorus 3', 'Chorus 3',
+    'Verse 4', 'Pre Chorus 4', 'Chorus 4',
+    'Bridge', 'Outro',
+  ];
+  let timingsWinId = null;
+  let timingsWinProjectId = null;
+  let timingsSaveTimer = null;
+  let offsetsWinId = null;
+  let mvOffsets = { ltx23: 2, ltx25: 0, fasth3: 0 };
+
+  function parseDrag(e) {
+    let raw = e.dataTransfer.getData('application/json');
+    if (!raw) raw = e.dataTransfer.getData('text/plain');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (_) { return null; }
   }
 
-  async function saveSettings() {
-    if (!currentSessionId) return;
-    try { await apiPost('/director/sessions/' + currentSessionId + '/settings', { settings }); } catch (e) {}
+  function assetThumb(assetId, filename) {
+    const thumb = `/thumbnails/${assetId}.jpg`;
+    const fallback = `/images/${filename}`;
+    return `<img src="${thumb}" onerror="this.onerror=null;this.src='${fallback}'" alt="">`;
   }
 
-  // === Timeline ===
-  function renderTimeline() {
-    const container = document.getElementById('dr-timeline');
-    if (!container) return;
-    if (!directorScenes.length) { container.style.display = 'none'; return; }
-    container.style.display = 'flex';
-    container.innerHTML = '';
-    directorScenes.forEach((sc, i) => {
-      const card = document.createElement('div');
-      card.className = 'dr-scene-card';
-      const hasImg = sc.candidate_images && sc.candidate_images.length > 0;
-      const selectedImg = sc.selected_image_id;
-      const previewAsset = selectedImg ? allAssets.find(a => a.id === selectedImg) : null;
-      const firstAsset = hasImg && !previewAsset ? allAssets.find(a => a.id === sc.candidate_images[0]) : null;
-      const thumbSrc = previewAsset ? '/images/' + previewAsset.filename : (firstAsset ? '/images/' + firstAsset.filename : null);
-      const isGenerating = sc._generating;
-      const asset = previewAsset || firstAsset;
-      let sceneAr = (settings.aspect_ratio || '16:9').replace(':', '/');
-      if (asset) {
-        if (asset.aspect_ratio) sceneAr = asset.aspect_ratio.replace(':', '/');
-        else if (asset.width && asset.height) sceneAr = asset.width + '/' + asset.height;
-      }
-
-      let thumbHtml = '';
-      if (isGenerating) {
-        thumbHtml = '<div class="sc-gen-progress"><div class="spinner" style="width:14px;height:14px;margin:0 auto"></div><div>generating...</div></div>';
-      } else if (thumbSrc) {
-        thumbHtml = '<img src="' + thumbSrc + '" loading="lazy">';
-      } else {
-        thumbHtml = '<span class="sc-pending"><i class="fa-solid fa-hourglass-half"></i> pending</span>';
-      }
-
-      const activeLora = sc.lora_name || (settings.loras && settings.loras.length ? (typeof settings.loras[0] === 'string' ? settings.loras[0] : (settings.loras[0].name || '')) : null);
-
-      card.innerHTML = `
-        <div class="sc-header">
-          <span class="sc-num">#${i + 1}</span>
-          <span>${(sc.duration || 5).toFixed(1)}s</span>
-        </div>
-        <div class="sc-title" title="${escHtml(sc.description || sc.title || '')}">${escHtml(sc.description || sc.title || 'Scene ' + (i + 1))}</div>
-        <div class="sc-thumb" style="aspect-ratio:${sceneAr}">${thumbHtml}</div>
-        ${activeLora ? '<div class="sc-lora" title="' + escHtml(activeLora) + '"><i class="fa-solid fa-layer-group"></i> ' + escHtml(activeLora.split('.')[0]) + '</div>' : ''}
-        <div class="sc-actions">
-          ${hasImg ? '<button class="sc-regen" title="Regenerate"><i class="fa-solid fa-rotate"></i></button><button class="sc-del" title="Delete image"><i class="fa-solid fa-trash-can"></i></button>' : ''}
-        </div>
-      `;
-
-      // Wire actions
-      const regenBtn = card.querySelector('.sc-regen');
-      const delBtn = card.querySelector('.sc-del');
-      if (regenBtn) regenBtn.onclick = (e) => { e.stopPropagation(); generateSceneImage(sc); };
-      if (delBtn) delBtn.onclick = async (e) => {
-        e.stopPropagation();
-        if (!confirm('Delete scene #' + (sc.scene_number || (directorScenes.indexOf(sc) + 1)) + '?')) return;
-        try {
-          await apiPost('/director/sessions/' + currentSessionId + '/scene/' + sc.id + '/delete', {});
-          const idx = directorScenes.indexOf(sc);
-          if (idx >= 0) {
-            directorScenes.splice(idx, 1);
-            // Renumber in-memory
-            directorScenes.forEach((s, i) => s.scene_number = i + 1);
-          }
-          renderTimeline();
-          showToast('Scene deleted', 'success');
-        } catch (e) { showToast('Failed to delete scene', 'error'); }
-      };
-
-      container.appendChild(card);
-    });
+  function resOptionsHTML(selected) {
+    return RES_OPTIONS.map(r => `<option value="${r}" ${(selected || '720p') === r ? 'selected' : ''}>${r}</option>`).join('');
+  }
+  function arOptionsHTML(selected) {
+    return AR_OPTIONS.map(a => `<option value="${a}" ${(selected || '3:2') === a ? 'selected' : ''}>${a}</option>`).join('');
   }
 
-  // === Attachments ===
-  function renderAttachments() {
-    const bar = document.getElementById('dr-attachments');
-    if (!bar) return;
-    bar.innerHTML = '';
-    if (!drAttachments.length) { bar.style.display = 'none'; return; }
-    bar.style.display = 'flex';
-    drAttachments.forEach((att, i) => {
-      const el = document.createElement('div');
-      el.className = 'dr-att';
-      if (att.type === 'image' || att.type === 'video') {
-        el.innerHTML = '<img src="' + att.src + '"><span>' + escHtml(att.name) + '</span>';
-      } else if (att.type === 'audio') {
-        el.innerHTML = '<i class="fa-solid fa-music" style="color:#8b5cf6;font-size:13px"></i><span>' + escHtml(att.name) + '</span>';
-      }
-      const trash = document.createElement('span');
-      trash.className = 'dr-att-trash';
-      trash.innerHTML = '<i class="fa-solid fa-xmark"></i>';
-      trash.onclick = () => { drAttachments.splice(i, 1); renderAttachments(); };
-      el.appendChild(trash);
-      bar.appendChild(el);
-    });
+  function offsetText(key) {
+    const v = Number(mvOffsets[key] || 0);
+    return v ? ` (${v > 0 ? '+' : ''}${v}f)` : '';
+  }
+  function modelOptionsHTML(selected) {
+    const opts = [
+      ['', 'Project model…'],
+      ['ltx23', 'LTX 2.3' + offsetText('ltx23')],
+      ['ltx25', 'LTX 2.5' + offsetText('ltx25')],
+      ['fasth3', 'FastH3' + offsetText('fasth3')],
+    ];
+    return opts.map(([v, label]) => `<option value="${v}" ${((selected || '') === v) ? 'selected' : ''}>${label}</option>`).join('');
   }
 
-  // === Messages ===
-  function renderMessages() {
-    const container = document.getElementById('dr-msgs');
-    if (!container) return;
-    container.innerHTML = '';
-    if (!directorMessages.length) {
-      const welcome = document.createElement('div');
-      welcome.className = 'chat-msg assistant';
-      welcome.innerHTML = '<div class="msg-text">🎬 Welcome to Director! Tell me about the video you want to create. I\'ll help you plan scenes, generate images, and build a complete sequence.</div><div class="msg-time">' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</div>';
-      container.appendChild(welcome);
-      return;
-    }
-    directorMessages.forEach(m => {
-      const d = document.createElement('div');
-      d.className = 'chat-msg ' + (m.role || 'assistant');
-      d.innerHTML = '<div class="msg-text">' + mdToHtml(m.content) + '</div><div class="msg-time">' + (m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '') + '</div>';
-      container.appendChild(d);
-    });
-    container.scrollTop = container.scrollHeight;
-  }
-
-  // === Generation ===
-  async function generateSceneImage(scene) {
-    if (!scene || !scene.prompt || !currentSessionId) return;
-    scene._generating = true;
-    renderTimeline();
-
-    const aspect = settings.aspect_ratio || '16:9';
-    const prompt = scene.prompt;
-    const loraName = scene.lora_name || (settings.loras && settings.loras.length ? (typeof settings.loras[0] === 'string' ? settings.loras[0] : settings.loras[0].name) : null);
-    const loraStr = 0.6;
-    const model = settings.image_model || currentImageModel || 'schnell';
-    const workflowLabel = loraName ? `LoRA (${loraName.split('.')[0]})` : model === 'klein' ? 'Klein' : model === 'qwen' ? 'Qwen' : 'Schnell';
-    showToast('Generating with ' + workflowLabel + ' workflow', 'info');
-
+  async function loadMvOffsets() {
     try {
-      const body = {
-        prompt,
-        resolution: settings.resolution || '720p',
-        aspect_ratio: aspect,
-        mode: 'image',
-        count: 1,
-        image_model: model,
-        qwen_turbo: typeof qwenTurbo !== 'undefined' ? qwenTurbo : true,
-        lora_name: loraName,
-        lora_strength: loraStr
-      };
-      const resp = await fetch('/generate/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let generatedFn = null;
-      let genW = 0, genH = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          let evt; try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-          if (evt.type === 'image_ready') {
-            generatedFn = evt.local_filename;
-            if (evt.width) genW = evt.width;
-            if (evt.height) genH = evt.height;
-          }
-        }
-      }
-      if (generatedFn) {
-        const saveRes = await apiPost('/director/sessions/' + currentSessionId + '/scene/' + scene.id + '/save-image', {
-          filename: generatedFn, prompt, width: genW, height: genH, aspect_ratio: aspect, lora_name: loraName
-        });
-        if (!allAssets.some(a => a.id === saveRes.asset_id)) allAssets.push({ id: saveRes.asset_id, type: 'image', filename: generatedFn, prompt, width: genW, height: genH, aspect_ratio: aspect });
-        if (!scene.candidate_images) scene.candidate_images = [];
-        scene.candidate_images.push(saveRes.asset_id);
-        scene.selected_image_id = saveRes.asset_id;
-        // Persist selected_image_id immediately
-        try { await apiPost('/director/sessions/' + currentSessionId + '/scene/' + scene.id + '/select-image', { asset_id: saveRes.asset_id }); } catch (_) {}
-
-        showToast('Image generated for scene #' + (scene.scene_number || (directorScenes.indexOf(scene) + 1)), 'success');
-      }
-    } catch (e) {
-      showToast('Generation failed: ' + e.message, 'error');
-    }
-    scene._generating = false;
-    renderTimeline();
-  }
-
-  async function generateDirectorVideoForScene(scene) {
-    if (!scene || !scene.selected_image_id) return;
-    const imgAsset = allAssets.find(a => a.id === scene.selected_image_id);
-    if (!imgAsset || !imgAsset.filename) return;
-    scene._generating = true;
-    renderTimeline();
-
-    const aspect = settings.aspect_ratio || '16:9';
-    const vprompt = (scene.prompt || imgAsset.prompt || 'cinematic motion') + ', smooth camera';
-    const duration = Math.max(2, Math.min(30, Math.round(scene.duration || 6)));
-
-    const body = {
-      prompt: vprompt,
-      resolution: settings.resolution || '720p',
-      aspect_ratio: aspect,
-      mode: 'video',
-      duration,
-      count: 1,
-      source_image: imgAsset.filename,
-      image_model: settings.image_model || currentImageModel || 'schnell',
-      qwen_turbo: typeof qwenTurbo !== 'undefined' ? qwenTurbo : true
-    };
-
-    let videoFn = null;
-    let vidW = 0, vidH = 0, vidDur = duration;
-    try {
-      const resp = await fetch('/generate/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          let evt; try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-          if (evt.type === 'video_ready') {
-            videoFn = evt.local_filename;
-            if (evt.width) vidW = evt.width;
-            if (evt.height) vidH = evt.height;
-            if (evt.duration) vidDur = evt.duration;
-          }
-        }
-      }
-      if (videoFn) {
-        scene.video_id = videoFn;
-        scene.status = 'has_video';
-        scene.video_duration = vidDur;
-        try {
-          await apiPost('/director/sessions/' + currentSessionId + '/scene/' + scene.id + '/save-video', {
-            filename: videoFn, duration: vidDur, prompt: vprompt,
-            width: vidW, height: vidH, parent_id: scene.selected_image_id
-          });
-        } catch (_) {}
-        showToast('Video generated for scene #' + (scene.scene_number || (directorScenes.indexOf(scene) + 1)), 'success');
-      }
-    } catch (e) {
-      showToast('Video generation failed: ' + e.message, 'error');
-    }
-    scene._generating = false;
-    renderTimeline();
-  }
-
-  function updateDebugPanel() {
-    const content = document.getElementById('dr-debug-content');
-    if (!content) return;
-    if (!lastDebugMessages || !lastDebugMessages.length) {
-      content.textContent = 'No debug data yet.';
-      return;
-    }
-    if (debugActiveTab === 'system') {
-      const sys = lastDebugMessages.filter(m => m.role === 'system');
-      content.textContent = sys.length ? sys.map(m => m.content).join('\n\n---\n\n') : '(no system messages)';
-    } else if (debugActiveTab === 'user') {
-      const texts = lastDebugMessages.filter(m => m.role === 'user').map(m => m.content);
-      content.textContent = texts.length ? texts.join('\n\n---\n\n') : '(no user messages)';
-    } else if (debugActiveTab === 'response') {
-      const texts = lastDebugMessages.filter(m => m.role === 'assistant').map(m => m.content);
-      content.textContent = texts.length ? texts.join('\n\n---\n\n') : '(no responses yet)';
-    }
-  }
-
-  async function autoGenerateScenes() {
-    const pending = directorScenes.filter(sc => sc.prompt && (!sc.candidate_images || !sc.candidate_images.length));
-    if (!pending.length) return;
-    const container = document.getElementById('dr-msgs');
-    const progressMsg = document.createElement('div');
-    progressMsg.className = 'chat-msg assistant';
-    progressMsg.innerHTML = '<div class="msg-text"><i class="fa-solid fa-wand-magic-sparkles"></i> Generating images for ' + pending.length + ' scene(s)...</div>';
-    container.appendChild(progressMsg);
-    container.scrollTop = container.scrollHeight;
-
-    for (const sc of pending) {
-      await generateSceneImage(sc);
-    }
-    const doneText = 'All images generated! You can trash or regenerate individual images from the timeline.';
-    progressMsg.innerHTML = '<div class="msg-text" style="color:var(--accent, #6366f1)"><i class="fa-solid fa-check-circle"></i> ' + doneText + '</div>';
-    container.scrollTop = container.scrollHeight;
-    directorMessages.push({ role: 'assistant', content: doneText, timestamp: new Date().toISOString() });
-    try {
-      await apiPost('/director/sessions/' + currentSessionId + '/add-message', { role: 'assistant', content: doneText });
+      const s = await apiGet('/settings');
+      mvOffsets = { ...mvOffsets, ...(s.segment_timecode_offsets || {}) };
     } catch (_) {}
   }
 
-  // === Session ops ===
-  async function loadSession(sessionId) {
-    currentSessionId = sessionId;
-    try {
-      const data = await apiGet('/director/sessions/' + sessionId);
-      if (data.settings && typeof data.settings === 'object') {
-        settings = { ...settings, ...data.settings };
-      }
-      lastDebugMessages = null;
-      updateDebugPanel();
-      directorMessages = data.messages || [];
-      directorScenes = [];
-      const seen = new Set();
-      (data.scenes || []).forEach(sc => {
-        const num = sc.scene_number;
-        if (num != null && seen.has(num)) return;
-        if (num != null) seen.add(num);
-        directorScenes.push({ ...sc, prompt: sc.prompt || sc.generated_prompt || '', lora_name: sc.lora_name || null });
-      });
-      // Reload available assets as attachments
-      drAttachments = (data.available_assets || []).map(a => ({
-        type: a.type, name: a.filename,
-        src: '/' + a.type + 's/' + a.filename, id: a.asset_id
-      }));
-      renderSettingsPills();
-      renderTimeline();
-      renderMessages();
-      renderAttachments();
-      // Scroll messages to bottom
-      const mc = document.getElementById('dr-msgs');
-      if (mc) setTimeout(() => mc.scrollTop = mc.scrollHeight, 50);
-    } catch (e) {
-      showToast('Failed to load session', 'error');
+  function findSeg(segId) {
+    for (const slot of (currentProject?.slots || [])) {
+      const seg = (slot.segments || []).find(s => s.id === segId);
+      if (seg) return seg;
+    }
+    return null;
+  }
+  function removeSegFromModel(segId) {
+    for (const slot of (currentProject?.slots || [])) {
+      if (!slot.segments) continue;
+      const i = slot.segments.findIndex(s => s.id === segId);
+      if (i >= 0) { slot.segments.splice(i, 1); return; }
     }
   }
-
-  async function sendMessage(text) {
-    if (!text.trim()) return;
-    if (!currentSessionId) {
-      try {
-        const sess = await apiPost('/director/sessions', {});
-        currentSessionId = sess.id;
-        directorSessions.unshift(sess);
-        renderDirectorSidebar();
-      } catch (e) {
-        showToast('Failed to create session', 'error');
-        return;
-      }
-    }
-
-    const container = document.getElementById('dr-msgs');
-    const now = new Date();
-    const userDiv = document.createElement('div');
-    userDiv.className = 'chat-msg user';
-    userDiv.innerHTML = '<div class="msg-text">' + mdToHtml(text) + '</div><div class="msg-time">' + now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</div>';
-    container.appendChild(userDiv);
-    container.scrollTop = container.scrollHeight;
-
-    const typing = document.createElement('div');
-    typing.className = 'chat-msg assistant';
-    typing.innerHTML = '<div class="spinner" style="width:16px;height:16px;margin:4px 0"></div>';
-    container.appendChild(typing);
-    container.scrollTop = container.scrollHeight;
-
-    try {
-      const res = await apiPost('/director/sessions/' + currentSessionId + '/chat', { message: text, settings: settings });
-      typing.remove();
-      if (res.debug_messages) {
-        lastDebugMessages = res.debug_messages;
-        updateDebugPanel();
-      }
-      if (res.response) {
-        const assistDiv = document.createElement('div');
-        assistDiv.className = 'chat-msg assistant';
-        assistDiv.innerHTML = '<div class="msg-text">' + mdToHtml(res.response) + '</div><div class="msg-time">' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '</div>';
-        container.appendChild(assistDiv);
-        container.scrollTop = container.scrollHeight;
-        directorMessages.push({ role: 'assistant', content: res.response });
-      }
-      // Apply any settings the agent returned (don't overwrite loras with empty from DB race)
-      if (res.settings && typeof res.settings === 'object') {
-        Object.keys(res.settings).forEach(k => {
-          if (k === 'loras' && (!res.settings.loras || !res.settings.loras.length)) return;
-          settings[k] = res.settings[k];
-        });
-        renderSettingsPills();
-        saveSettings();
-      }
-      // Auto-generate if agent returned scenes
-      if (res.generate && res.scenes && res.scenes.length) {
-        for (const sc of res.scenes) {
-          const num = sc.scene_number;
-          const existing = num ? directorScenes.find(s => s.scene_number === num) : null;
-          if (existing) {
-            Object.assign(existing, sc, { id: existing.id });
-          } else if (sc.id) {
-            directorScenes.push(sc);
-          }
-        }
-        renderTimeline();
-        setTimeout(() => autoGenerateScenes(), 300);
-      }
-      // Handle scene actions (delete/regenerate from chat)
-      if (res.scene_actions && res.scene_actions.length) {
-        for (const act of res.scene_actions) {
-          const sc = directorScenes.find(s => s.scene_number === act.scene_number);
-          if (!sc) continue;
-          if (act.action === 'delete') {
-            const idx = directorScenes.indexOf(sc);
-            if (idx >= 0) directorScenes.splice(idx, 1);
-            directorScenes.forEach((s, i) => s.scene_number = i + 1);
-          } else if (act.action === 'regenerate') {
-            sc.candidate_images = [];
-            sc.selected_image_id = null;
-            sc.status = 'pending';
-          }
-        }
-        renderTimeline();
-        // Auto-generate images for regenerated scenes
-        const toGen = directorScenes.filter(s => s.prompt && (!s.candidate_images || !s.candidate_images.length));
-        if (toGen.length) {
-          const container = document.getElementById('dr-msgs');
-          const pg = document.createElement('div');
-          pg.className = 'chat-msg assistant';
-          pg.innerHTML = '<div class="msg-text"><i class="fa-solid fa-wand-magic-sparkles"></i> Regenerating ' + toGen.length + ' scene(s)...</div>';
-          container.appendChild(pg);
-          container.scrollTop = container.scrollHeight;
-          for (const sc of toGen) { await generateSceneImage(sc); }
-          pg.innerHTML = '<div class="msg-text" style="color:var(--accent)"><i class="fa-solid fa-check-circle"></i> Scene(s) regenerated!</div>';
-          container.scrollTop = container.scrollHeight;
-        }
-      }
-      // Handle video/animation generation
-      if (res.animate) {
-        const approved = directorScenes.filter(s => s.selected_image_id);
-        if (!approved.length) {
-          const msgDiv = document.createElement('div');
-          msgDiv.className = 'chat-msg assistant';
-          msgDiv.innerHTML = '<div class="msg-text" style="color:#f87171"><i class="fa-solid fa-circle-exclamation"></i> No approved scenes to animate. Generate images first.</div>';
-          container.appendChild(msgDiv);
-          directorMessages.push({ role: 'assistant', content: 'No approved scenes to animate.' });
-        } else {
-          const vpg = document.createElement('div');
-          vpg.className = 'chat-msg assistant';
-          vpg.innerHTML = '<div class="msg-text"><i class="fa-solid fa-film"></i> Generating videos for ' + approved.length + ' scene(s)...</div>';
-          container.appendChild(vpg);
-          container.scrollTop = container.scrollHeight;
-          for (const sc of approved) {
-            await generateDirectorVideoForScene(sc);
-          }
-          vpg.innerHTML = '<div class="msg-text" style="color:var(--accent)"><i class="fa-solid fa-check-circle"></i> Videos generated! ' + approved.length + ' scene(s) animated.</div>';
-          container.scrollTop = container.scrollHeight;
-          directorMessages.push({ role: 'assistant', content: 'Videos generated for all scenes!' });
-          try {
-            await apiPost('/director/sessions/' + currentSessionId + '/add-message', { role: 'assistant', content: 'Videos generated for all scenes!' });
-          } catch (_) {}
-        }
-        renderTimeline();
-      }
-    } catch (e) {
-      typing.remove();
-      showToast('Failed to send message: ' + (e.message || 'unknown error'), 'error');
-    }
+  function updateDurLabel(segId) {
+    const seg = findSeg(segId);
+    const row = document.querySelector(`.music-seg-row[data-seg="${segId}"]`);
+    if (!row || !seg) return;
+    const el = row.querySelector('.music-seg-dur');
+    const d = Math.max(0, (Number(seg.end_time) || 0) - (Number(seg.start_time) || 0));
+    if (el) el.textContent = d.toFixed(1) + 's';
   }
 
-  // === Handle drop ===
-  function handleDrop(e) {
-    e.preventDefault();
-    let raw = e.dataTransfer.getData('application/json');
-    if (!raw) raw = e.dataTransfer.getData('text/plain');
-    if (raw) {
-      try {
-        const data = JSON.parse(raw);
-        if (data && data.type && data.src) {
-          drAttachments.push({ type: data.type, name: data.name, src: data.src, id: data.id });
-          renderAttachments();
-          return;
-        }
-      } catch (_) {}
-    }
-    // File drop (desktop)
-    const files = e.dataTransfer.files;
-    if (files.length) {
-      for (const file of files) {
-        const type = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : (file.type.startsWith('audio/') ? 'audio' : null));
-        if (!type) continue;
-        const blobUrl = URL.createObjectURL(file);
-        drAttachments.push({ type, name: file.name, src: blobUrl, id: null, _file: file });
-      }
-      renderAttachments();
-    }
-  }
-
-  // === File upload ===
-  async function uploadFiles(files) {
-    if (!currentSessionId) return;
-    for (const file of files) {
-      const type = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : (file.type.startsWith('audio/') ? 'audio' : null));
-      if (!type) continue;
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch('/director/sessions/' + currentSessionId + '/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (data.success) {
-          const src = '/' + type + 's/' + data.filename;
-          drAttachments.push({ type, name: file.name, src, id: data.id });
-          if (!allAssets.some(a => a.id === data.id)) {
-            allAssets.push({ id: data.id, type, filename: data.filename });
-          }
-        }
-      } catch (e) {
-        showToast('Upload failed: ' + file.name, 'error');
-      }
-    }
-    renderAttachments();
-  }
-
-  // === Session sidebar ===
-  async function loadDirectorSessions() {
-    try {
-      const data = await apiGet('/director/sessions');
-      directorSessions = data.sessions || [];
-      renderDirectorSidebar();
-    } catch (e) {
-      showToast('Failed to load sessions', 'error');
-    }
-  }
-
-  function renderDirectorSidebar() {
-    const list = document.getElementById('dr-sess-list');
-    if (!list) return;
-    list.innerHTML = '';
-    directorSessions.forEach(s => {
-      const item = document.createElement('div');
-      item.className = 'chat-session-item' + (s.id === currentSessionId ? ' active' : '');
-      const title = s.title || 'Director Session';
-      const time = s.last_updated ? new Date(s.last_updated).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
-      item.title = title;
-      item.style.position = 'relative';
-      item.innerHTML = '<span>' + escHtml(title) + '</span><span class="dr-sess-time">' + time + '</span><button class="ch-del" title="Delete session"><i class="fa-solid fa-xmark"></i></button>';
-      const delBtn = item.querySelector('.ch-del');
-      delBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm('Delete this session?')) return;
-        try {
-          await fetch('/director/sessions/' + s.id, { method: 'DELETE' });
-          if (currentSessionId === s.id) {
-            currentSessionId = null;
-            const other = directorSessions.find(x => x.id !== s.id);
-            const mainEl = document.getElementById('dr-main');
-            if (other) {
-              if (mainEl) mainEl.style.display = 'flex';
-              await loadSession(other.id);
-            } else {
-              if (mainEl) mainEl.style.display = 'none';
-              document.getElementById('dr-msgs').innerHTML = '';
-              directorMessages = [];
-              directorScenes = [];
-            }
-          }
-          await loadDirectorSessions();
-        } catch (e) {
-          showToast('Failed to delete session', 'error');
-        }
-      });
-      item.addEventListener('click', async () => {
-        if (s.id === currentSessionId) return;
-        const mainEl = document.getElementById('dr-main');
-        if (mainEl) mainEl.style.display = 'flex';
-        await loadSession(s.id);
-        const msgContainer = document.getElementById('dr-msgs');
-        if (msgContainer) setTimeout(() => { msgContainer.scrollTop = msgContainer.scrollHeight; }, 100);
-        renderDirectorSidebar();
-      });
-      list.appendChild(item);
+  function getSections() {
+    const stored = (currentProject?.settings || {}).sections;
+    return SECTION_NAMES.map((name, i) => {
+      const s = Array.isArray(stored) ? (stored[i] || {}) : {};
+      return {
+        name,
+        start: Math.max(0, Number(s.start) || 0),
+        end: Math.max(0, Number(s.end) || 0),
+      };
     });
   }
 
-  async function switchToNewSession() {
+  function fmtSecs(v) {
+    const total = Math.max(0, Number(v) || 0);
+    const m = Math.floor(total / 60);
+    const s = Math.floor(total % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  }
+
+  function openTimings() {
+    if (!currentProject) return;
+    if (timingsWinId && windows[timingsWinId] && timingsWinProjectId === currentProjectId) {
+      focusWindow(timingsWinId);
+      return;
+    }
+    if (timingsWinId && windows[timingsWinId]) closeWindow(timingsWinId);
+    timingsWinProjectId = currentProjectId;
+    timingsWinId = createWindow({
+      title: 'Song Sections',
+      icon: 'fa-clock',
+      width: 520,
+      height: 640,
+      stateKey: 'MusicVideoTimings',
+      onClose: () => { timingsWinId = null; timingsWinProjectId = null; },
+    });
+    renderTimings();
+  }
+
+  function renderTimings() {
+    if (!timingsWinId) return;
+    const win = document.getElementById(timingsWinId);
+    if (!win) return;
+    const bodyEl = win.querySelector('.window-body');
+    if (!bodyEl) return;
+    bodyEl.style.padding = '0';
+    bodyEl.style.background = '#fff';
+    const sections = getSections();
+    const lastEnd = sections.reduce((mx, s) => Math.max(mx, s.end), 0);
+    bodyEl.innerHTML = `
+      <div class="mv-timings">
+        <div class="mv-timings-head">
+          <span class="mv-timings-title">${escHtml(currentProject?.title || 'Untitled')}</span>
+          <span class="mv-timings-total">Last end: ${fmtSecs(lastEnd)}</span>
+        </div>
+        <div class="mv-timings-grid">
+          <div class="mv-timings-row mv-timings-row-head">
+            <span>Section</span><span>Start (s)</span><span>End (s)</span><span>Length</span>
+          </div>
+          ${sections.map((s, i) => `
+            <div class="mv-timings-row" data-idx="${i}">
+              <span class="mv-timings-name">${escHtml(s.name)}</span>
+              <input type="number" class="mv-timings-input mv-timings-start" data-idx="${i}" step="0.1" min="0" value="${s.start}">
+              <input type="number" class="mv-timings-input mv-timings-end" data-idx="${i}" step="0.1" min="0" value="${s.end}">
+              <span class="mv-timings-len">${fmtSecs(Math.max(0, s.end - s.start))}</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+
+    bodyEl.querySelectorAll('.mv-timings-input').forEach((inp) => {
+      inp.onchange = () => {
+        const idx = parseInt(inp.dataset.idx, 10);
+        const val = Math.max(0, parseFloat(inp.value) || 0);
+        inp.value = val;
+        const list = getSections();
+        if (inp.classList.contains('mv-timings-start')) list[idx].start = val;
+        else list[idx].end = val;
+        currentProject.settings = currentProject.settings || {};
+        currentProject.settings.sections = list;
+        const row = inp.closest('.mv-timings-row');
+        const lenEl = row ? row.querySelector('.mv-timings-len') : null;
+        if (lenEl) lenEl.textContent = fmtSecs(Math.max(0, list[idx].end - list[idx].start));
+        const totalEl = bodyEl.querySelector('.mv-timings-total');
+        if (totalEl) totalEl.textContent = 'Last end: ' + fmtSecs(list.reduce((mx, s) => Math.max(mx, s.end), 0));
+        saveTimings(list);
+      };
+    });
+  }
+
+  function saveTimings(sections) {
+    const pid = currentProjectId;
+    clearTimeout(timingsSaveTimer);
+    timingsSaveTimer = setTimeout(async () => {
+      try {
+        await apiPost(`/music/projects/${pid}/settings`, { settings: { sections } });
+      } catch (e) {
+        showToast('Save timings failed: ' + e.message, 'error');
+      }
+    }, 350);
+  }
+
+  function renderShell() {
+    body.innerHTML = `
+      <div class="story-layout">
+        <aside class="story-sidebar">
+          <div class="story-sidebar-head">
+            <span>Music Videos</span>
+            <button type="button" id="mv-new" class="story-btn-sm" title="New project"><i class="fa-solid fa-plus"></i></button>
+          </div>
+          <div id="mv-project-list" class="story-session-list"></div>
+        </aside>
+        <main class="story-main" id="mv-main">
+          <div class="story-empty">Loading…</div>
+        </main>
+      </div>`;
+    document.getElementById('mv-new').onclick = async () => {
+      try {
+        const p = await apiPost('/music/projects', { title: 'Untitled Music Video' });
+        await loadProjects();
+        await selectProject(p.id);
+      } catch (e) {
+        showToast('Create project failed: ' + e.message, 'error');
+      }
+    };
+  }
+
+  async function loadProjects() {
     try {
-      const sess = await apiPost('/director/sessions', {});
-      currentSessionId = sess.id;
-      directorMessages = [];
-      directorScenes = [];
-      settings = { aspect_ratio: typeof bbAr !== 'undefined' ? bbAr : '16:9', resolution: typeof bbRes !== 'undefined' ? bbRes : '720p', duration: 6, loras: [], image_model: typeof currentImageModel !== 'undefined' ? currentImageModel : 'schnell' };
-      drAttachments = [];
-      lastDebugMessages = null;
-      updateDebugPanel();
-      const mainEl = document.getElementById('dr-main');
-      if (mainEl) mainEl.style.display = 'flex';
-      renderSettingsPills();
-      renderTimeline();
-      renderMessages();
-      renderAttachments();
-      directorSessions.unshift(sess);
-      renderDirectorSidebar();
+      const res = await apiGet('/music/projects');
+      projects = res.projects || [];
     } catch (e) {
-      showToast('Failed to create session', 'error');
+      projects = [];
+      showToast('Failed to load projects: ' + e.message, 'error');
+    }
+    renderProjectList();
+  }
+
+  function renderProjectList() {
+    const list = document.getElementById('mv-project-list');
+    if (!list) return;
+    if (!projects.length) {
+      list.innerHTML = '<div class="story-muted" style="padding:10px">No projects yet</div>';
+      return;
+    }
+    list.innerHTML = projects.map(p => `
+      <div class="story-session-item ${p.id === currentProjectId ? 'active' : ''}" data-pid="${p.id}">
+        <span class="story-session-title">${escHtml(p.title || 'Untitled')}</span>
+        <button type="button" class="story-session-del" data-pid="${p.id}" title="Delete"><i class="fa-solid fa-trash-can"></i></button>
+      </div>`).join('');
+    list.querySelectorAll('.story-session-item').forEach(item => {
+      item.onclick = (e) => {
+        if (e.target.closest('.story-session-del')) return;
+        selectProject(item.dataset.pid);
+      };
+    });
+    list.querySelectorAll('.story-session-del').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this project? Library media is kept.')) return;
+        const wasCurrent = currentProjectId === btn.dataset.pid;
+        try {
+          await fetch('/music/projects/' + btn.dataset.pid, { method: 'DELETE' });
+        } catch (_) {}
+        if (wasCurrent) { currentProjectId = null; currentProject = null; }
+        await loadProjects();
+        if (projects.length) {
+          await selectProject(currentProjectId || projects[0].id);
+        } else {
+          await ensureProject();
+        }
+      };
+    });
+  }
+
+  async function selectProject(id) {
+    if (batchState.active && id !== currentProjectId) { showToast('Cancel the running batch first', 'info'); return; }
+    try {
+      currentProject = await apiGet('/music/projects/' + id);
+      currentProjectId = currentProject.id;
+      audioDuration = null;
+    } catch (e) {
+      showToast('Failed to load project: ' + e.message, 'error');
+      return;
+    }
+    renderProjectList();
+    renderProject();
+    if (timingsWinId && windows[timingsWinId]) {
+      timingsWinProjectId = currentProjectId;
+      renderTimings();
     }
   }
 
-  // === Build HTML ===
-  body.innerHTML = `
-    <div style="display:flex;flex-direction:column;height:100%">
-      <div id="dr-pills" class="dr-pills"></div>
-      <div style="display:flex;flex:1;min-height:0">
-        <div class="chat-sidebar">
-          <div class="chat-sidebar-header">
-            <button id="dr-new-sess"><i class="fa-solid fa-plus"></i> New</button>
-          </div>
-          <div class="chat-sidebar-list" id="dr-sess-list"></div>
+  async function ensureProject() {
+    if (currentProjectId) return;
+    try {
+      const p = await apiPost('/music/projects', { title: 'Untitled Music Video' });
+      await loadProjects();
+      await selectProject(p.id);
+    } catch (e) {
+      showToast('Create project failed: ' + e.message, 'error');
+    }
+  }
+
+  function renderSlot(slot) {
+    const img = slot.image || {};
+    const imgHTML = img.filename
+      ? assetThumb(img.asset_id, img.filename) +
+        `<button type="button" class="music-slot-trash" data-slot="${slot.id}" title="Remove image"><i class="fa-solid fa-xmark"></i></button>`
+      : '<div class="music-slot-placeholder"><i class="fa-solid fa-image" style="font-size:20px;display:block;margin-bottom:4px"></i>Drop image</div>';
+    const segs = (slot.segments || []).map(renderSegment).join('');
+    const canGen = !!img.filename && (slot.segments || []).length > 0;
+    const slotBatch = batchState.active && batchState.mode === 'slot' && batchState.slotId === slot.id;
+    return `
+      <div class="music-slot" data-slot="${slot.id}">
+        <div class="music-slot-head">
+          <input class="music-slot-name" data-slot="${slot.id}" value="${escAttr(slot.name || '')}" placeholder="Character name">
+          <button type="button" class="music-slot-gen-all" data-slot="${slot.id}" ${(!canGen || batchState.active) ? 'disabled' : ''} title="Generate all segments for this character">
+            <i class="fa-solid fa-forward"></i> ${slotBatch ? `Generating ${batchState.current}/${batchState.total}…` : 'Generate All'}
+          </button>
         </div>
-        <div id="dr-main" class="chat-main" style="display:none">
-          <div id="dr-timeline" class="dr-timeline"></div>
-          <div id="dr-msgs" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--chat-bg, #f5f5f7)"></div>
-          <div id="dr-attachments" class="dr-attachments"></div>
-          <div class="chat-bar" style="flex-shrink:0">
-            <button class="chat-plus" id="dr-plus" title="Attach file"><i class="fa-solid fa-plus"></i></button>
-            <input type="text" id="dr-input" placeholder="Tell me about your video...">
-            <button id="dr-send"><i class="fa-solid fa-arrow-up"></i></button>
-          </div>
-          <button class="dr-debug-toggle" id="dr-debug-btn"><i class="fa-solid fa-bug"></i> Debug</button>
-          <div class="dr-debug-panel" id="dr-debug-panel">
-            <div class="dr-debug-tabs">
-              <span class="dr-debug-tab active" data-tab="system">System</span>
-              <span class="dr-debug-tab" data-tab="user">User</span>
-              <span class="dr-debug-tab" data-tab="response">Response</span>
-              <button class="dr-debug-copy" id="dr-debug-copy" title="Copy to clipboard"><i class="fa-solid fa-copy"></i> Copy</button>
-            </div>
-            <div class="dr-debug-content" id="dr-debug-content">No debug data yet.</div>
-          </div>
+        <div class="music-slot-img" data-slot="${slot.id}">${imgHTML}</div>
+        <div class="music-seg-list" data-slot="${slot.id}">${segs}</div>
+        <button type="button" class="music-add-seg" data-slot="${slot.id}"><i class="fa-solid fa-plus"></i> Add segment</button>
+      </div>`;
+  }
+
+  function renderSegment(seg) {
+    const busy = busySegments[seg.id];
+    const status = seg.status || 'draft';
+    let statusHTML = '';
+    if (busy === 'generating' || status === 'generating') {
+      statusHTML = '<span class="music-seg-status generating"><i class="fa-solid fa-spinner fa-spin"></i> generating…</span>';
+    } else if (status === 'ready') {
+      statusHTML = '<span class="music-seg-status ready"><i class="fa-solid fa-check"></i> saved</span>';
+    } else if (status === 'error') {
+      statusHTML = `<span class="music-seg-status error" title="${escAttr(seg.error || '')}"><i class="fa-solid fa-circle-exclamation"></i> error</span>`;
+    }
+    const d = Math.max(0, (Number(seg.end_time) || 0) - (Number(seg.start_time) || 0));
+    const disabled = (busy === 'generating' || status === 'generating') ? ' disabled' : '';
+    return `
+      <div class="music-seg-row" data-seg="${seg.id}">
+        <div class="music-seg-times">
+          <label>Start</label>
+          <input type="number" step="0.1" min="0" class="music-seg-num music-seg-start" data-seg="${seg.id}" value="${seg.start_time ?? 0}">
+          <label>End</label>
+          <input type="number" step="0.1" min="0" class="music-seg-num music-seg-end" data-seg="${seg.id}" value="${seg.end_time ?? 0}">
+          <span class="music-seg-dur">${d.toFixed(1)}s</span>
+        </div>
+        <textarea class="music-seg-prompt" data-seg="${seg.id}" placeholder="Prompt for this segment…">${escHtml(seg.prompt || '')}</textarea>
+        <div class="music-seg-actions">
+          <button type="button" class="music-seg-gen" data-seg="${seg.id}"${disabled}><i class="fa-solid fa-play"></i> Generate</button>
+          ${statusHTML}
+          <button type="button" class="music-seg-del" data-seg="${seg.id}" title="Delete segment"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  function renderProject() {
+    const main = document.getElementById('mv-main');
+    if (!main) return;
+    if (!currentProject) {
+      main.innerHTML = '<div class="story-empty">Create or select a project to start.</div>';
+      return;
+    }
+    const s = currentProject.settings || {};
+    const audio = currentProject.audio || {};
+    const totalSegments = (currentProject.slots || []).reduce((n, sl) => n + ((sl.segments || []).length), 0);
+    const readySegments = (currentProject.slots || []).reduce((n, sl) => n + ((sl.segments || []).filter((x) => !!x.video_filename).length), 0);
+    const imageSlots = (currentProject.slots || []).filter((sl) => (sl.image || {}).filename);
+    const missingSegments = imageSlots.reduce((n, sl) => n + ((sl.segments || []).filter((x) => !x.video_filename).length), 0);
+    const audioLabel = audio.name
+      || ((allAssets.find((x) => x.id === audio.asset_id) || {}).prompt || '')
+      || audio.filename;
+    const audioChip = audio.filename
+      ? `<span class="music-audio-chip"><i class="fa-solid fa-music"></i>
+           <span class="story-audio-name">${escHtml(audioLabel)}</span>
+           ${audioDuration ? `<span class="story-muted">${Number(audioDuration).toFixed(1)}s</span>` : ''}
+           <button type="button" class="music-audio-trash" title="Remove audio"><i class="fa-solid fa-xmark"></i></button>
+         </span>`
+      : '<div class="story-muted">Drop an audio file from the Library here</div>';
+    main.innerHTML = `
+      <div class="story-main-head">
+        <input id="mv-title" class="story-title-input" value="${escAttr(currentProject.title || '')}" placeholder="Untitled Music Video">
+        <div class="music-settings">
+          <label class="story-muted">Res</label>
+          <select id="mv-res">${resOptionsHTML(s.resolution || '720p')}</select>
+          <label class="story-muted">AR</label>
+          <select id="mv-ar">${arOptionsHTML(s.aspect_ratio || '3:2')}</select>
+          <label class="story-muted" title="Model used for this project's renders (generation + timecode offset)">Model</label>
+          <select id="mv-model" title="Project render model (generation + timecode offset)">${modelOptionsHTML(s.model || '')}</select>
+          <button type="button" id="mv-timings" class="music-timings-btn" title="Set song section timings">
+            <i class="fa-solid fa-clock"></i> Timings
+          </button>
+          <button type="button" id="mv-offsets" class="music-timings-btn" title="Set per-model filename timecode offsets"><i class="fa-solid fa-sliders"></i> Offsets</button>
+          <button type="button" id="mv-auto-segs" class="music-auto-btn" title="Create segments from section timings">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Auto Segments
+          </button>
+          <button type="button" id="mv-gen-all" class="music-gen-all-btn" ${(!totalSegments || batchState.active) ? 'disabled' : ''} title="Generate every segment in every scene">
+            <i class="fa-solid fa-forward-fast"></i> Generate All Scenes
+          </button>
+          <button type="button" id="mv-gen-missing" class="music-auto-btn" ${(!missingSegments || batchState.active) ? 'disabled' : ''} title="Generate only segments that have no video yet">
+            <i class="fa-solid fa-forward"></i> Missing (${missingSegments})
+          </button>
+          <button type="button" id="mv-download-segs" class="music-download-btn" ${(!readySegments || batchState.active) ? 'disabled' : ''} title="Download all generated segments as a zip">
+            <i class="fa-solid fa-file-zipper"></i> Download Segments
+          </button>
+          <button type="button" id="mv-reapply-names" class="music-timings-btn" ${readySegments ? '' : 'disabled'} title="Re-apply timecode filenames using the project model"><i class="fa-solid fa-arrows-rotate"></i> Re-apply Names</button>
+          <button type="button" id="mv-clear-segs" class="music-clear-btn" ${totalSegments ? '' : 'disabled'} title="Remove all segments from every character">
+            <i class="fa-solid fa-broom"></i> Clear Segments
+          </button>
         </div>
       </div>
-    </div>
-  `;
-  body.appendChild(style);
+      <div id="mv-batch-bar" class="music-batch-bar" style="display:none">
+        <span id="mv-batch-label" class="music-batch-label"></span>
+        <div class="music-batch-track"><div id="mv-batch-fill" class="music-batch-fill"></div></div>
+        <button type="button" id="mv-batch-pause" class="music-batch-btn"><i class="fa-solid fa-pause"></i> Pause</button>
+        <button type="button" id="mv-batch-cancel" class="music-batch-btn danger"><i class="fa-solid fa-xmark"></i> Cancel</button>
+      </div>
+      <div class="music-main-body">
+        <div id="mv-audio-drop" class="music-audio-drop">
+          <div class="music-audio-drop-label"><i class="fa-solid fa-music"></i> Audio Track</div>
+          ${audioChip}
+        </div>
+        <div class="music-char-grid">
+          ${(currentProject.slots || []).map(renderSlot).join('')}
+        </div>
+      </div>`;
+    wireProjectHandlers();
+  }
 
-  // === Init ===
-  (async () => {
-    if (!allAssets || !allAssets.length) {
-      try { allAssets = await apiGet('/history'); } catch (_) {}
-    }
-    await loadDirectorSessions();
-    if (directorSessions.length) {
-      // Load most recent session
-      const latest = directorSessions[0];
-      const mainEl = document.getElementById('dr-main');
-      if (mainEl) mainEl.style.display = 'flex';
-      await loadSession(latest.id);
-      renderDirectorSidebar();
-    } else {
-      // Create first session
+  function wireProjectHandlers() {
+    const titleEl = document.getElementById('mv-title');
+    if (titleEl) titleEl.onchange = async () => {
+      const title = titleEl.value.trim() || 'Untitled Music Video';
+      currentProject.title = title;
+      const p = projects.find(x => x.id === currentProjectId);
+      if (p) p.title = title;
+      renderProjectList();
+      try { await apiPost(`/music/projects/${currentProjectId}/title`, { title }); } catch (_) {}
+    };
+
+    const resEl = document.getElementById('mv-res');
+    if (resEl) resEl.onchange = async () => {
+      currentProject.settings = currentProject.settings || {};
+      currentProject.settings.resolution = resEl.value;
+      try { await apiPost(`/music/projects/${currentProjectId}/settings`, { settings: { resolution: resEl.value } }); } catch (_) {}
+    };
+    const arEl = document.getElementById('mv-ar');
+    if (arEl) arEl.onchange = async () => {
+      currentProject.settings = currentProject.settings || {};
+      currentProject.settings.aspect_ratio = arEl.value;
+      try { await apiPost(`/music/projects/${currentProjectId}/settings`, { settings: { aspect_ratio: arEl.value } }); } catch (_) {}
+    };
+    const modelEl = document.getElementById('mv-model');
+    if (modelEl) modelEl.onchange = async () => {
+      currentProject.settings = currentProject.settings || {};
+      currentProject.settings.model = modelEl.value;
       try {
-        const sess = await apiPost('/director/sessions', {});
-        currentSessionId = sess.id;
-        directorSessions.unshift(sess);
-        const mainEl = document.getElementById('dr-main');
-        if (mainEl) mainEl.style.display = 'flex';
-        renderDirectorSidebar();
-        renderSettingsPills();
-        renderMessages();
+        await apiPost(`/music/projects/${currentProjectId}/settings`, { settings: { model: modelEl.value } });
+        showToast(modelEl.value
+          ? 'Project model saved. Use Re-apply Names or Download Segments.'
+          : 'Project model cleared');
       } catch (e) {
-        showToast('Failed to create session', 'error');
+        showToast('Save model failed: ' + e.message, 'error');
+      }
+    };
+
+    // Song section timings
+    const timingsBtn = document.getElementById('mv-timings');
+    if (timingsBtn) timingsBtn.onclick = () => openTimings();
+
+    const offsetsBtn = document.getElementById('mv-offsets');
+    if (offsetsBtn) offsetsBtn.onclick = () => openOffsets();
+
+    const reapplyNamesBtn = document.getElementById('mv-reapply-names');
+    if (reapplyNamesBtn) reapplyNamesBtn.onclick = () => reapplyProjectNames();
+
+    // Auto-create segments from section timings
+    const autoSegsBtn = document.getElementById('mv-auto-segs');
+    if (autoSegsBtn) autoSegsBtn.onclick = async () => {
+      if (!currentProject) return;
+      const timed = ((currentProject.settings || {}).sections || []).filter(
+        (s) => (Number(s.end) || 0) > (Number(s.start) || 0)
+      ).length;
+      if (!timed) { showToast('Add section timings first', 'error'); return; }
+      const projectModel = (currentProject.settings || {}).model || '';
+      const effectiveModel = projectModel || currentVideoModel;
+      const maxClip = effectiveModel === 'fasth3' ? 15 : 30;
+      if (!confirm(`Create segments from ${timed} timed sections for characters with images that have no segments?\n\nPadding: 3s · Chunk overlap: 3s · Max clip: ${maxClip}s`)) return;
+      try {
+        const res = await apiPost(`/music/projects/${currentProjectId}/auto-segments`, {});
+        await selectProject(currentProjectId);
+        if (res.created) {
+          showToast(`Created ${res.created} segments across ${res.slots_processed} character(s)`);
+        } else {
+          showToast('No characters to fill (add images or clear existing segments)', 'info');
+        }
+      } catch (e) {
+        showToast('Auto segments failed: ' + e.message, 'error');
+      }
+    };
+
+    // Generate all scenes
+    const genAllBtn = document.getElementById('mv-gen-all');
+    if (genAllBtn) genAllBtn.onclick = () => generateAllSegments();
+
+    const genMissingBtn = document.getElementById('mv-gen-missing');
+    if (genMissingBtn) genMissingBtn.onclick = () => generateMissingSegments();
+
+    // Download all generated segments as a zip
+    const dlSegsBtn = document.getElementById('mv-download-segs');
+    if (dlSegsBtn) dlSegsBtn.onclick = () => downloadSegments();
+
+    // Batch controls
+    const batchPauseBtn = document.getElementById('mv-batch-pause');
+    if (batchPauseBtn) batchPauseBtn.onclick = () => toggleBatchPause();
+    const batchCancelBtn = document.getElementById('mv-batch-cancel');
+    if (batchCancelBtn) batchCancelBtn.onclick = () => cancelBatch();
+
+    // Clear all segments
+    const clearSegsBtn = document.getElementById('mv-clear-segs');
+    if (clearSegsBtn) clearSegsBtn.onclick = async () => {
+      const total = (currentProject.slots || []).reduce((n, sl) => n + ((sl.segments || []).length), 0);
+      if (!total) { showToast('No segments to clear', 'info'); return; }
+      if (!confirm(`Clear all ${total} segment(s) from every character?`)) return;
+      try {
+        await apiPost(`/music/projects/${currentProjectId}/segments/clear`, {});
+        (currentProject.slots || []).forEach((sl) => { sl.segments = []; });
+        renderProject();
+        showToast('All segments cleared');
+      } catch (e) {
+        showToast('Failed to clear segments: ' + e.message, 'error');
+      }
+    };
+
+    // Audio drop
+    const audioDrop = document.getElementById('mv-audio-drop');
+    if (audioDrop) {
+      audioDrop.addEventListener('dragover', (e) => { e.preventDefault(); audioDrop.classList.add('music-drop-active'); });
+      audioDrop.addEventListener('dragleave', () => audioDrop.classList.remove('music-drop-active'));
+      audioDrop.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        audioDrop.classList.remove('music-drop-active');
+        const data = parseDrag(e);
+        if (!data || data.type !== 'audio') { showToast('Drop an audio file from the Library', 'error'); return; }
+        try {
+          const displayName = (data.prompt || '').trim();
+          const res = await apiPost(`/music/projects/${currentProjectId}/audio`, { asset_id: data.id, filename: data.name, name: displayName });
+          currentProject.audio = res.audio || { asset_id: data.id, filename: data.name, name: displayName };
+          audioDuration = res.duration ?? null;
+          renderProject();
+        } catch (err) { showToast('Failed to set audio: ' + err.message, 'error'); }
+      });
+    }
+    const audioTrash = document.querySelector('.music-audio-trash');
+    if (audioTrash) audioTrash.onclick = async () => {
+      try {
+        await apiPost(`/music/projects/${currentProjectId}/audio`, { asset_id: '', filename: '' });
+        currentProject.audio = {};
+        audioDuration = null;
+        renderProject();
+      } catch (_) {}
+    };
+
+    // Slot image drop zones
+    document.querySelectorAll('.music-slot-img').forEach(zone => {
+      const slotId = zone.dataset.slot;
+      zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('music-drop-active'); });
+      zone.addEventListener('dragleave', () => zone.classList.remove('music-drop-active'));
+      zone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        zone.classList.remove('music-drop-active');
+        const data = parseDrag(e);
+        if (!data || data.type !== 'image') { showToast('Drop an image from the Library', 'error'); return; }
+        try {
+          const updated = await apiPost(`/music/slots/${slotId}`, { image: { asset_id: data.id, filename: data.name } });
+          const slot = (currentProject.slots || []).find(s => s.id === slotId);
+          if (slot) slot.image = updated.image || { asset_id: data.id, filename: data.name };
+          renderProject();
+        } catch (err) { showToast('Failed to set image: ' + err.message, 'error'); }
+      });
+    });
+    document.querySelectorAll('.music-slot-trash').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const slotId = btn.dataset.slot;
+        try {
+          await apiPost(`/music/slots/${slotId}`, { image: {} });
+          const slot = (currentProject.slots || []).find(s => s.id === slotId);
+          if (slot) slot.image = {};
+          renderProject();
+        } catch (_) {}
+      };
+    });
+    document.querySelectorAll('.music-slot-name').forEach(inp => {
+      inp.onchange = async () => {
+        const slotId = inp.dataset.slot;
+        const name = inp.value.trim();
+        const slot = (currentProject.slots || []).find(s => s.id === slotId);
+        if (slot) slot.name = name;
+        try { await apiPost(`/music/slots/${slotId}`, { name }); } catch (_) {}
+      };
+    });
+
+    // Generate all segments for one character
+    document.querySelectorAll('.music-slot-gen-all').forEach((btn) => {
+      btn.onclick = () => generateSlotSegments(btn.dataset.slot);
+    });
+
+    // Add segment
+    document.querySelectorAll('.music-add-seg').forEach(btn => {
+      btn.onclick = async () => {
+        const slotId = btn.dataset.slot;
+        const slot = (currentProject.slots || []).find(s => s.id === slotId);
+        let start = 0;
+        if (slot && slot.segments && slot.segments.length) {
+          start = Math.max(...slot.segments.map(s => Number(s.end_time) || 0));
+        }
+        try {
+          const seg = await apiPost(`/music/slots/${slotId}/segments`, { start_time: start, end_time: start + 6, prompt: '' });
+          if (slot) { slot.segments = slot.segments || []; slot.segments.push(seg); }
+          renderProject();
+        } catch (err) { showToast('Add segment failed: ' + err.message, 'error'); }
+      };
+    });
+
+    // Segment start/end/prompt
+    document.querySelectorAll('.music-seg-start').forEach(inp => {
+      inp.onchange = async () => {
+        const segId = inp.dataset.seg;
+        const seg = findSeg(segId);
+        if (seg) seg.start_time = parseFloat(inp.value) || 0;
+        updateDurLabel(segId);
+        try { await apiPost(`/music/segments/${segId}`, { start_time: seg ? seg.start_time : 0 }); } catch (_) {}
+      };
+    });
+    document.querySelectorAll('.music-seg-end').forEach(inp => {
+      inp.onchange = async () => {
+        const segId = inp.dataset.seg;
+        const seg = findSeg(segId);
+        if (seg) seg.end_time = parseFloat(inp.value) || 0;
+        updateDurLabel(segId);
+        try { await apiPost(`/music/segments/${segId}`, { end_time: seg ? seg.end_time : 0 }); } catch (_) {}
+      };
+    });
+    document.querySelectorAll('.music-seg-prompt').forEach(txt => {
+      txt.onchange = async () => {
+        const segId = txt.dataset.seg;
+        const seg = findSeg(segId);
+        if (seg) seg.prompt = txt.value;
+        try { await apiPost(`/music/segments/${segId}`, { prompt: txt.value }); } catch (_) {}
+      };
+    });
+
+    // Delete segment
+    document.querySelectorAll('.music-seg-del').forEach(btn => {
+      btn.onclick = async () => {
+        const segId = btn.dataset.seg;
+        if (!confirm('Delete this segment?')) return;
+        try {
+          await fetch('/music/segments/' + segId, { method: 'DELETE' });
+          removeSegFromModel(segId);
+          renderProject();
+        } catch (err) { showToast('Delete failed: ' + err.message, 'error'); }
+      };
+    });
+
+    // Generate
+    document.querySelectorAll('.music-seg-gen').forEach(btn => {
+      btn.onclick = () => generateSegment(btn.dataset.seg);
+    });
+  }
+
+  function setSegRowState(segId, state, error) {
+    const row = document.querySelector(`.music-seg-row[data-seg="${segId}"]`);
+    if (!row) return;
+    const btn = row.querySelector('.music-seg-gen');
+    const actions = row.querySelector('.music-seg-actions');
+    let st = row.querySelector('.music-seg-status');
+    if (!st && actions) {
+      st = document.createElement('span');
+      actions.insertBefore(st, row.querySelector('.music-seg-del'));
+    }
+    if (state === 'generating') {
+      if (btn) btn.disabled = true;
+      if (st) { st.className = 'music-seg-status generating'; st.removeAttribute('title'); st.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> generating…'; }
+    } else if (state === 'ready') {
+      if (btn) btn.disabled = batchState.active;
+      if (st) { st.className = 'music-seg-status ready'; st.removeAttribute('title'); st.innerHTML = '<i class="fa-solid fa-check"></i> saved'; }
+    } else if (state === 'error') {
+      if (btn) btn.disabled = batchState.active;
+      if (st) { st.className = 'music-seg-status error'; st.title = error || ''; st.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> error'; }
+    } else {
+      if (btn) btn.disabled = batchState.active;
+      if (st) { st.className = 'music-seg-status'; st.removeAttribute('title'); st.innerHTML = ''; }
+    }
+  }
+
+  function updateSegmentProgress(segId, p) {
+    const wf = Math.max(0, Math.min(100, Number(p.workflow_percent) || 0));
+    const node = Math.max(0, Math.min(100, Number(p.node_percent) || 0));
+    const row = document.querySelector(`.music-seg-row[data-seg="${segId}"]`);
+    if (row) {
+      const actions = row.querySelector('.music-seg-actions');
+      let st = row.querySelector('.music-seg-status');
+      if (!st && actions) {
+        st = document.createElement('span');
+        actions.insertBefore(st, row.querySelector('.music-seg-del'));
+      }
+      if (st) {
+        st.className = 'music-seg-status generating';
+        st.innerHTML = `WF ${wf}% · Node ${node}%`;
       }
     }
-  })();
-
-  // === Wire input, buttons, drag-drop ===
-  setTimeout(() => {
-    const newBtn = document.getElementById('dr-new-sess');
-    if (newBtn) newBtn.addEventListener('click', switchToNewSession);
-
-    const input = document.getElementById('dr-input');
-    const sendBtn = document.getElementById('dr-send');
-    const plusBtn = document.getElementById('dr-plus');
-
-    if (input) {
-      input.focus();
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          const text = input.value.trim();
-          if (text) { input.value = ''; sendMessage(text); }
-        }
-      });
+    if (batchState.active) {
+      batchState.progressText = `WF ${wf}% · Node ${node}%`;
+      updateBatchBar(batchState.current, batchState.total, batchState.currentLabel);
     }
-    if (sendBtn) {
-      sendBtn.addEventListener('click', () => {
-        const text = input ? input.value.trim() : '';
-        if (text && input) { input.value = ''; sendMessage(text); }
-      });
-    }
-    if (plusBtn) {
-      plusBtn.addEventListener('click', () => {
-        const fi = document.createElement('input');
-        fi.type = 'file';
-        fi.accept = 'image/*,video/*,audio/*';
-        fi.multiple = true;
-        fi.onchange = () => {
-          if (fi.files.length) uploadFiles(fi.files);
-        };
-        fi.click();
-      });
-    }
+  }
 
-    // Debug toggle
-    const debugBtn = document.getElementById('dr-debug-btn');
-    const debugPanel = document.getElementById('dr-debug-panel');
-    if (debugBtn && debugPanel) {
-      debugBtn.addEventListener('click', () => {
-        debugPanel.classList.toggle('open');
-      });
+  async function runSegment(segId, opts = {}) {
+    const seg = findSeg(segId);
+    if (!seg) return { ok: false, error: 'Segment not found' };
+    if (!currentProject.audio || !currentProject.audio.filename) return { ok: false, error: 'Set an audio track first' };
+    const slot = (currentProject.slots || []).find((s) => (s.segments || []).some((x) => x.id === segId));
+    if (slot && (!slot.image || !slot.image.filename)) return { ok: false, error: 'Set an image for this character first' };
+    if ((Number(seg.end_time) || 0) <= (Number(seg.start_time) || 0)) return { ok: false, error: 'End time must be greater than start time' };
+    if (!(seg.prompt || '').trim()) return { ok: false, error: 'Enter a prompt for this segment' };
+
+    busySegments[segId] = 'generating';
+    setSegRowState(segId, 'generating');
+
+    const jobId = 'seg_' + segId + '_' + Date.now().toString(36);
+    const stopProgress = startProgressPolling(jobId, (p) => updateSegmentProgress(segId, p));
+
+    let ok = false;
+    let error = '';
+    try {
+      const res = await apiPost(`/music/segments/${segId}/generate`, { job_id: jobId });
+      if (res && res.success) {
+        seg.status = 'ready';
+        seg.video_asset_id = res.asset_id;
+        seg.video_filename = res.filename;
+        seg.error = '';
+        ok = true;
+        setSegRowState(segId, 'ready');
+      } else {
+        error = (res && res.error) || 'Generation failed';
+        seg.status = 'error';
+        seg.error = error;
+        setSegRowState(segId, 'error', error);
+      }
+    } catch (e) {
+      error = e.message || 'Generation failed';
+      seg.status = 'error';
+      seg.error = error;
+      setSegRowState(segId, 'error', error);
+    } finally {
+      stopProgress();
     }
-    document.querySelectorAll('.dr-debug-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.dr-debug-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        debugActiveTab = tab.dataset.tab;
-        updateDebugPanel();
-      });
+    delete busySegments[segId];
+    if (ok && opts.refreshLibrary) {
+      try { await refreshLibraryFromDB(); } catch (_) {}
+    }
+    return { ok, error };
+  }
+
+  async function generateSegment(segId) {
+    const res = await runSegment(segId, { refreshLibrary: true });
+    if (res.ok) showToast('Segment saved to Library');
+    else showToast(res.error || 'Generation failed', 'error');
+    renderProject();
+  }
+
+  function batchBarEls() {
+    return {
+      bar: document.getElementById('mv-batch-bar'),
+      label: document.getElementById('mv-batch-label'),
+      fill: document.getElementById('mv-batch-fill'),
+      pause: document.getElementById('mv-batch-pause'),
+      cancel: document.getElementById('mv-batch-cancel'),
+    };
+  }
+
+  function updateBatchBar(done, total, currentLabel) {
+    const { label, fill, pause } = batchBarEls();
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const progressSuffix = batchState.progressText ? ' · ' + batchState.progressText : '';
+    if (label) {
+      label.textContent = (batchState.paused
+        ? `Paused — ${done}/${total}${currentLabel ? ' — ' + currentLabel : ''}`
+        : `Generating ${done}/${total}${currentLabel ? ' — ' + currentLabel : ''}`) + progressSuffix;
+    }
+    if (fill) fill.style.width = pct + '%';
+    if (pause) {
+      pause.innerHTML = batchState.paused
+        ? '<i class="fa-solid fa-play"></i> Resume'
+        : '<i class="fa-solid fa-pause"></i> Pause';
+    }
+    if (batchState.mode === 'slot') {
+      const btn = document.querySelector(`.music-slot-gen-all[data-slot="${batchState.slotId}"]`);
+      if (btn) btn.innerHTML = `<i class="fa-solid fa-forward"></i> ${done}/${total}`;
+    }
+  }
+
+  function showBatchBar(labelText) {
+    const { bar, cancel } = batchBarEls();
+    if (bar) bar.style.display = 'flex';
+    if (cancel) cancel.disabled = false;
+    document.querySelectorAll('#mv-gen-all, #mv-gen-missing, #mv-download-segs, #mv-clear-segs, #mv-auto-segs, .music-slot-gen-all, .music-seg-gen, .music-add-seg').forEach((b) => { b.disabled = true; });
+    updateBatchBar(0, batchState.total, labelText || '');
+  }
+
+  function hideBatchBar() {
+    const { bar } = batchBarEls();
+    if (bar) bar.style.display = 'none';
+  }
+
+  function waitWhilePaused() {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (!batchState.active || batchState.cancelled || !batchState.paused) resolve();
+        else setTimeout(check, 200);
+      };
+      check();
     });
-    const copyBtn = document.getElementById('dr-debug-copy');
-    if (copyBtn) {
-      copyBtn.addEventListener('click', async () => {
-        const content = document.getElementById('dr-debug-content');
-        if (!content || !content.textContent) return;
-        try {
-          await navigator.clipboard.writeText(content.textContent);
-          copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied';
-          setTimeout(() => { copyBtn.innerHTML = '<i class="fa-solid fa-copy"></i> Copy'; }, 2000);
-        } catch { }
-      });
+  }
+
+  function toggleBatchPause() {
+    if (!batchState.active) return;
+    batchState.paused = !batchState.paused;
+    updateBatchBar(batchState.current, batchState.total, batchState.currentLabel);
+  }
+
+  function cancelBatch() {
+    if (!batchState.active) return;
+    batchState.cancelled = true;
+    batchState.paused = false;
+    const { cancel, label } = batchBarEls();
+    if (cancel) cancel.disabled = true;
+    if (label) label.textContent = 'Cancelling after current segment…';
+  }
+
+  async function runBatch(items, mode, slotId, labelText) {
+    if (batchState.active) return;
+    batchState = { active: true, paused: false, cancelled: false, mode, slotId: slotId || null, current: 0, total: items.length, label: labelText || '', currentLabel: '', progressText: '' };
+    showBatchBar(labelText);
+    let ok = 0;
+    let failed = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (batchState.cancelled) break;
+      await waitWhilePaused();
+      if (batchState.cancelled) break;
+      const seg = items[i];
+      const slot = (currentProject.slots || []).find((s) => (s.segments || []).some((x) => x.id === seg.id));
+      const char = slot ? (slot.name || 'Character') : 'Character';
+      batchState.currentLabel = `${char} ${Number(seg.start_time).toFixed(1)}–${Number(seg.end_time).toFixed(1)}s`;
+      batchState.progressText = '';
+      updateBatchBar(i, items.length, batchState.currentLabel);
+      const res = await runSegment(seg.id, { refreshLibrary: false });
+      if (res.ok) ok++; else failed++;
+      batchState.progressText = '';
+      batchState.current = i + 1;
+      updateBatchBar(i + 1, items.length);
     }
+    const cancelled = batchState.cancelled;
+    batchState.active = false;
+    hideBatchBar();
+    try { await refreshLibraryFromDB(); } catch (_) {}
+    renderProject();
+    if (cancelled) showToast(`Batch cancelled — ${ok} generated, ${failed} failed`, 'info');
+    else showToast(`Batch complete — ${ok} generated, ${failed} failed`, failed ? 'error' : 'success');
+  }
 
-    // Drag and drop on the whole body
-    let dragCounter = 0;
-    body.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter++; });
-    body.addEventListener('dragover', (e) => { e.preventDefault(); });
-    body.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter--; if (dragCounter <= 0) dragCounter = 0; });
-    body.addEventListener('drop', handleDrop);
-  }, 50);
-}
+  async function generateSlotSegments(slotId) {
+    if (batchState.active) return;
+    const slot = (currentProject.slots || []).find((s) => s.id === slotId);
+    if (!slot) return;
+    if (!slot.image || !slot.image.filename) { showToast('Set an image for this character first', 'error'); return; }
+    const items = (slot.segments || []).slice();
+    if (!items.length) { showToast('No segments for this character', 'info'); return; }
+    if (!confirm(`Regenerate all ${items.length} segment(s) for ${slot.name || 'this character'}?`)) return;
+    await runBatch(items, 'slot', slotId, slot.name || 'Character');
+  }
 
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
+  async function generateAllSegments() {
+    if (batchState.active) return;
+    const slots = (currentProject.slots || []).filter((s) => (s.image || {}).filename && (s.segments || []).length);
+    if (!slots.length) { showToast('No characters with images and segments', 'info'); return; }
+    const items = slots.flatMap((s) => (s.segments || []).slice());
+    if (!confirm(`Regenerate all ${items.length} segment(s) across ${slots.length} character(s)?\n\nThis runs sequentially and may take a long time.`)) return;
+    await runBatch(items, 'all', null, 'All scenes');
+  }
 
-function showOllamaDebugDialog(debugInfo, rawText, errorMsg) {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px';
-    overlay.innerHTML = `
-        <div class="glass-panel" style="width:100%;max-width:1100px;max-height:85vh;display:flex;flex-direction:column;border:1px solid rgba(255,255,255,0.08)">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.08)">
-                <div style="font-weight:600;color:#34d399;display:flex;align-items:center;gap:8px">
-                    <i class="fa-solid fa-bug"></i>
-                    <span>Ollama Debug — Exact Request Sent + Raw Response</span>
-                </div>
-                <button id="close-ollama-debug" style="background:none;border:none;color:rgba(255,255,255,0.5);font-size:22px;cursor:pointer;padding:2px 8px">×</button>
-            </div>
-            <div id="ollama-debug-body" style="padding:12px;overflow:auto;flex:1;font-size:13px;font-family:monospace;display:flex;flex-direction:column;gap:12px">
-                ${debugInfo ? `
-                <div>
-                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.4);margin-bottom:4px">Ollama Server</div>
-                    <div style="background:rgba(0,0,0,0.4);padding:6px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.08);color:#6ee7b7;white-space:pre-wrap">${escapeHtml(debugInfo.ollama_url || debugInfo.url || 'unknown')}</div>
-                </div>
-                <div>
-                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.4);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-                        <span>Exact Request Body Sent to /api/generate</span>
-                        <span><button class="copy-debug-btn" data-copy="full-request" style="font-size:9px;padding:2px 8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Copy JSON Body</button>
-                        <button class="copy-debug-btn" data-copy="curl" style="font-size:9px;padding:2px 8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Copy as curl</button></span>
-                    </div>
-                    <pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;border:1px solid rgba(255,255,255,0.08);font-size:11px;overflow:auto;max-height:200px;color:#a7f3d0">${escapeHtml(JSON.stringify((debugInfo && debugInfo.request && debugInfo.request.body) || {error: 'no request body'}, null, 2))}</pre>
-                </div>
-                <div>
-                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.4);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-                        <span>System Prompt</span>
-                        <button class="copy-debug-btn" data-copy="system" style="font-size:9px;padding:2px 8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Copy</button>
-                    </div>
-                    <pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;border:1px solid rgba(255,255,255,0.08);font-size:11px;overflow:auto;max-height:140px;color:#fde68a;white-space:pre-wrap">${escapeHtml(debugInfo.system_prompt || '')}</pre>
-                </div>
-                <div>
-                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.4);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-                        <span>User Prompt</span>
-                        <button class="copy-debug-btn" data-copy="user" style="font-size:9px;padding:2px 8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Copy</button>
-                    </div>
-                    <pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;border:1px solid rgba(255,255,255,0.08);font-size:11px;overflow:auto;max-height:200px;color:#bae6fd;white-space:pre-wrap">${escapeHtml(debugInfo.user_prompt || '')}</pre>
-                </div>
-                ` : ''}
-                <div>
-                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.4);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-                        <span>Raw Model Response</span>
-                        <button class="copy-debug-btn" data-copy="raw" style="font-size:9px;padding:2px 8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Copy</button>
-                    </div>
-                    <pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;border:1px solid rgba(255,255,255,0.08);font-size:11px;overflow:auto;max-height:240px;color:#fca5a5;white-space:pre-wrap">${escapeHtml(rawText || ((debugInfo && debugInfo.raw_response) || '(no raw text)'))}</pre>
-                </div>
-                ${errorMsg ? '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#f87171;margin-bottom:4px">Error / Note</div><div style="background:rgba(127,29,29,0.3);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:6px 8px;border-radius:4px;font-size:11px">' + escapeHtml(errorMsg) + '</div></div>' : ''}
-            </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;color:rgba(255,255,255,0.4)">
-                <div>Copy the "Exact Request Body" and paste it into Ollama's web UI for perfect reproduction.</div>
-                <button id="close-ollama-debug2" style="padding:4px 12px;font-size:11px;border-radius:999px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);cursor:pointer;font-family:inherit">Close</button>
-            </div>
+  async function generateMissingSegments() {
+    if (batchState.active) return;
+    const slots = (currentProject.slots || []).filter((s) => (s.image || {}).filename);
+    const missingSlots = slots.filter((s) => (s.segments || []).some((x) => !x.video_filename));
+    const items = missingSlots.flatMap((s) => (s.segments || []).filter((x) => !x.video_filename));
+    if (!items.length) { showToast('No missing segments', 'info'); return; }
+    if (!confirm(`Generate ${items.length} missing segment(s) across ${missingSlots.length} character(s)?`)) return;
+    await runBatch(items, 'missing', null, 'Missing scenes');
+  }
+
+  function downloadSegments() {
+    if (!currentProject) return;
+    const ready = (currentProject.slots || []).reduce((n, sl) => n + ((sl.segments || []).filter((x) => !!x.video_filename).length), 0);
+    if (!ready) { showToast('No generated segments to download', 'info'); return; }
+    const a = document.createElement('a');
+    a.href = `/music/projects/${currentProjectId}/segments/zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function reapplyProjectNames() {
+    if (!currentProject) return;
+    if (!confirm('Re-apply timecode filenames for this project using the selected project model?\n\nThis updates library display names. Downloads already use the offset.')) return;
+    try {
+      const res = await apiPost(`/music/projects/${currentProjectId}/segments/reapply-names`, {});
+      await selectProject(currentProjectId);
+      showToast(`Updated ${res.updated || 0} of ${res.total || 0} filename(s)`);
+    } catch (e) { showToast('Re-apply failed: ' + e.message, 'error'); }
+  }
+
+  function openOffsets() {
+    if (!currentProject) return;
+    if (offsetsWinId && windows[offsetsWinId]) { focusWindow(offsetsWinId); return; }
+    offsetsWinId = createWindow({
+      title: 'Timecode Offsets',
+      icon: 'fa-sliders',
+      width: 460,
+      height: 380,
+      stateKey: 'MusicVideoOffsets',
+      onClose: () => { offsetsWinId = null; },
+    });
+    renderOffsets();
+  }
+
+  async function renderOffsets() {
+    if (!offsetsWinId) return;
+    const win = document.getElementById(offsetsWinId);
+    if (!win) return;
+    const bodyEl = win.querySelector('.window-body');
+    if (!bodyEl) return;
+    let s = {};
+    try { s = await apiGet('/settings'); } catch (_) {}
+    if (!offsetsWinId || !document.getElementById(offsetsWinId)) return;
+    mvOffsets = { ...mvOffsets, ...(s.segment_timecode_offsets || {}) };
+    bodyEl.style.padding = '0';
+    bodyEl.innerHTML = `
+      <div class="mv-offsets">
+        <div class="mv-offsets-note">Positive = filename later (place the clip later). LTX 2.3 defaults to +2 frames.</div>
+        <label class="mv-offsets-row"><span>LTX 2.3</span><input id="mv-off-ltx23" type="number" step="1" value="${Number(mvOffsets.ltx23 || 0)}"><span>frames</span></label>
+        <label class="mv-offsets-row"><span>LTX 2.5</span><input id="mv-off-ltx25" type="number" step="1" value="${Number(mvOffsets.ltx25 || 0)}"><span>frames</span></label>
+        <label class="mv-offsets-row"><span>FastH3</span><input id="mv-off-fasth3" type="number" step="1" value="${Number(mvOffsets.fasth3 || 0)}"><span>frames</span></label>
+        <div class="mv-offsets-actions">
+          <button type="button" id="mv-offsets-save" class="music-timings-btn"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+          <button type="button" id="mv-offsets-reapply" class="music-timings-btn"><i class="fa-solid fa-arrows-rotate"></i> Re-apply Names</button>
         </div>
-    `;
-    document.body.appendChild(overlay);
+      </div>`;
+    document.getElementById('mv-offsets-save').onclick = async () => {
+      const payload = {};
+      for (const k of ['ltx23', 'ltx25', 'fasth3']) {
+        const el = document.getElementById('mv-off-' + k);
+        payload[k] = Math.trunc(Number(el.value) || 0);
+      }
+      try {
+        const res = await apiPost('/settings', { segment_timecode_offsets: payload });
+        mvOffsets = { ...mvOffsets, ...((res.settings || {}).segment_timecode_offsets || payload) };
+        renderProject();
+        renderOffsets();
+        showToast('Timecode offsets saved');
+      } catch (e) { showToast('Save offsets failed: ' + e.message, 'error'); }
+    };
+    document.getElementById('mv-offsets-reapply').onclick = async () => {
+      await reapplyProjectNames();
+      renderOffsets();
+    };
+  }
 
-    const close = () => overlay.remove();
-    overlay.querySelector('#close-ollama-debug').onclick = close;
-    overlay.querySelector('#close-ollama-debug2').onclick = close;
-    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  // Boot
+  renderShell();
+  (async () => {
+    await loadMvOffsets();
+    await loadProjects();
+    if (projects.length) {
+      await selectProject(projects[0].id);
+    } else {
+      await ensureProject();
+    }
+  })();
+}
 
-    overlay.querySelectorAll('.copy-debug-btn').forEach(btn => {
-        btn.onclick = () => {
-            let textToCopy = '';
-            const type = btn.dataset.copy;
+// ============================================================
+// APP: Single Frame
+// ============================================================
+function openSingleFrame() {
+  const wid = createWindow({ title: 'Single Frame', icon: 'fa-camera-retro', width: 1040, height: 720, stateKey: 'SingleFrame' });
+  const el = document.getElementById(wid);
+  const body = el.querySelector('.window-body');
+  body.style.background = 'var(--bg-window-light, #f5f5f5)';
+  body.style.padding = '0';
+  body.style.display = 'flex';
+  body.style.flexDirection = 'column';
+  body.style.overflow = 'hidden';
 
-            if (type === 'system' && debugInfo) textToCopy = debugInfo.system_prompt || '';
-            if (type === 'user' && debugInfo) textToCopy = debugInfo.user_prompt || '';
-            if (type === 'raw') textToCopy = rawText || ((debugInfo && debugInfo.raw_response) || '');
+  const FRAME_WINDOW = 24;
+  let asset = null;
+  let fps = 24;
+  let duration = 0;
+  let frameCount = 0;
+  let videoW = 0;
+  let videoH = 0;
+  let startIndex = 0;
+  let selectedIndex = -1;
+  let windowFrames = [];
+  let loading = false;
 
-            if (type === 'full-request' && debugInfo && debugInfo.request) {
-                textToCopy = JSON.stringify(debugInfo.request.body, null, 2);
-            }
+  function parseDrag(e) {
+    let raw = e.dataTransfer.getData('application/json');
+    if (!raw) raw = e.dataTransfer.getData('text/plain');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (_) { return null; }
+  }
 
-            if (type === 'curl' && debugInfo && debugInfo.request) {
-                const url = (debugInfo.request && debugInfo.request.url) || (debugInfo.ollama_url ? debugInfo.ollama_url + '/api/generate' : 'http://localhost:11434/api/generate');
-                const blob = JSON.stringify((debugInfo.request && debugInfo.request.body) || {}, null, 2);
-                textToCopy = 'curl -X POST "' + url + '" \\\n  -H "Content-Type: application/json" \\\n  -d \'' + blob.replace(/'/g, "'\\''") + '\'';
-            }
+  function fmtTime(s) {
+    s = Math.max(0, s || 0);
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    const ms = Math.floor((s - Math.floor(s)) * 1000);
+    return m + ':' + (sec < 10 ? '0' : '') + sec + '.' + String(ms).padStart(3, '0');
+  }
 
-            if (textToCopy) {
-                navigator.clipboard.writeText(textToCopy).then(() => {
-                    const orig = btn.textContent;
-                    btn.textContent = 'Copied!';
-                    setTimeout(() => { btn.textContent = orig; }, 1200);
-                }).catch(() => {
-                    prompt('Copy this text:', textToCopy);
-                });
-            }
-        };
+  function renderShell() {
+    body.innerHTML = `
+      <div class="sf-layout">
+        <div id="sf-drop" class="sf-drop">
+          <i class="fa-solid fa-film"></i>
+          <div class="sf-drop-title">Drop a video from the Library</div>
+          <div class="sf-muted">Frames load 24 at a time (1 second)</div>
+        </div>
+        <div id="sf-main" class="sf-main" style="display:none">
+          <div class="sf-head">
+            <span id="sf-filename" class="sf-filename"></span>
+            <span id="sf-info" class="sf-muted"></span>
+          </div>
+          <div class="sf-preview-wrap">
+            <video id="sf-preview" class="sf-preview" muted playsinline preload="auto"></video>
+          </div>
+          <div class="sf-strip-wrap">
+            <button id="sf-prev" class="sf-nav" title="Previous second"><i class="fa-solid fa-chevron-left"></i></button>
+            <div id="sf-strip" class="sf-strip"></div>
+            <button id="sf-next" class="sf-nav" title="Next second"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+          <div class="sf-seek-row">
+            <input type="range" id="sf-seek" min="0" max="0" step="1" value="0">
+            <span id="sf-seek-label" class="sf-muted"></span>
+          </div>
+          <div class="sf-bottom">
+            <div id="sf-selected" class="sf-selected">No frame selected</div>
+            <button id="sf-save" class="story-btn-primary" disabled><i class="fa-solid fa-download"></i> Save Image to Library</button>
+          </div>
+        </div>
+      </div>`;
+    wireDrop();
+    wireControls();
+  }
+
+  function wireDrop() {
+    const drop = document.getElementById('sf-drop');
+    body.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (drop && drop.offsetParent !== null) drop.classList.add('sf-drop-active');
     });
+    body.addEventListener('dragleave', () => {
+      if (drop) drop.classList.remove('sf-drop-active');
+    });
+    body.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (drop) drop.classList.remove('sf-drop-active');
+      const data = parseDrag(e);
+      if (!data || data.type !== 'video') { showToast('Drop a video from the Library', 'error'); return; }
+      await loadVideo(data.id, data.name);
+    });
+  }
+
+  function wireControls() {
+    const seek = document.getElementById('sf-seek');
+    if (seek) {
+      seek.addEventListener('input', () => {
+        const idx = parseInt(seek.value, 10) || 0;
+        const label = document.getElementById('sf-seek-label');
+        if (label) label.textContent = `Frame ${idx} / ${Math.max(0, frameCount - 1)} · ${fmtTime(idx / fps)}`;
+      });
+      seek.addEventListener('change', async () => {
+        const idx = parseInt(seek.value, 10) || 0;
+        const winStart = Math.floor(idx / FRAME_WINDOW) * FRAME_WINDOW;
+        await loadWindow(winStart);
+        selectFrame(idx);
+      });
+    }
+    const prev = document.getElementById('sf-prev');
+    if (prev) prev.onclick = () => moveWindow(-FRAME_WINDOW);
+    const next = document.getElementById('sf-next');
+    if (next) next.onclick = () => moveWindow(FRAME_WINDOW);
+    const save = document.getElementById('sf-save');
+    if (save) save.onclick = saveSelectedFrame;
+  }
+
+  async function loadVideo(assetId, filename) {
+    try {
+      const info = await apiPost('/frames/info', { asset_id: assetId });
+      if (!info || !info.success) {
+        showToast((info && info.error) || 'Failed to read video', 'error');
+        return;
+      }
+      asset = { id: assetId, filename: info.filename || filename };
+      fps = info.fps || 24;
+      duration = info.duration || 0;
+      frameCount = info.frame_count || Math.round(duration * fps);
+      videoW = info.width || 0;
+      videoH = info.height || 0;
+      startIndex = 0;
+      selectedIndex = -1;
+      windowFrames = [];
+
+      const drop = document.getElementById('sf-drop');
+      const main = document.getElementById('sf-main');
+      if (drop) drop.style.display = 'none';
+      if (main) main.style.display = 'flex';
+
+      const fn = document.getElementById('sf-filename');
+      if (fn) fn.textContent = asset.filename;
+      const inf = document.getElementById('sf-info');
+      if (inf) inf.textContent = `${frameCount} frames · ${Number(fps).toFixed(2)} fps · ${Number(duration).toFixed(2)}s · ${videoW}×${videoH}`;
+
+      const preview = document.getElementById('sf-preview');
+      if (preview) preview.src = '/videos/' + asset.filename;
+
+      const seek = document.getElementById('sf-seek');
+      if (seek) { seek.max = Math.max(0, frameCount - 1); seek.value = 0; }
+
+      const sel = document.getElementById('sf-selected');
+      if (sel) sel.textContent = 'No frame selected';
+      updateSeekLabel();
+      updateSaveButton();
+
+      await loadWindow(0);
+    } catch (e) {
+      showToast('Failed to read video: ' + e.message, 'error');
+    }
+  }
+
+  async function loadWindow(start) {
+    if (!asset || loading) return;
+    loading = true;
+    const maxStart = Math.max(0, frameCount - FRAME_WINDOW);
+    startIndex = Math.max(0, Math.min(Number(start) || 0, maxStart));
+    try {
+      const res = await apiPost('/frames/window', {
+        asset_id: asset.id,
+        start_index: startIndex,
+        count: FRAME_WINDOW,
+        fps,
+      });
+      if (!res || !res.success) {
+        showToast((res && res.error) || 'Failed to load frames', 'error');
+        return;
+      }
+      windowFrames = res.frames || [];
+      renderStrip();
+    } catch (e) {
+      showToast('Failed to load frames: ' + e.message, 'error');
+    } finally {
+      loading = false;
+    }
+  }
+
+  function renderStrip() {
+    const strip = document.getElementById('sf-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+    const ar = (videoW && videoH) ? (videoW / videoH) : 1.5;
+    const cellH = 72;
+    const cellW = Math.max(40, Math.round(cellH * ar));
+    windowFrames.forEach((fr) => {
+      const cell = document.createElement('div');
+      cell.className = 'sf-frame' + (fr.index === selectedIndex ? ' selected' : '');
+      cell.dataset.index = fr.index;
+      cell.title = `Frame ${fr.index} · ${fmtTime(fr.time)}`;
+      cell.style.width = cellW + 'px';
+      cell.style.height = cellH + 'px';
+      cell.innerHTML = `<img src="${fr.url}" loading="lazy" alt="">`;
+      cell.onclick = () => selectFrame(fr.index);
+      strip.appendChild(cell);
+    });
+    if (!windowFrames.length) {
+      strip.innerHTML = '<div class="sf-muted" style="padding:12px">No frames in this range</div>';
+    }
+  }
+
+  function selectFrame(index) {
+    selectedIndex = index;
+    const strip = document.getElementById('sf-strip');
+    if (strip) {
+      strip.querySelectorAll('.sf-frame').forEach((c) => {
+        c.classList.toggle('selected', Number(c.dataset.index) === index);
+      });
+    }
+    const preview = document.getElementById('sf-preview');
+    if (preview) {
+      try { preview.currentTime = index / fps; } catch (_) {}
+      preview.pause();
+    }
+    const seek = document.getElementById('sf-seek');
+    if (seek) seek.value = index;
+    updateSeekLabel();
+    updateSaveButton();
+    const sel = document.getElementById('sf-selected');
+    if (sel) sel.textContent = `Frame ${index} · ${fmtTime(index / fps)}`;
+  }
+
+  function moveWindow(delta) {
+    if (!asset) return;
+    const next = startIndex + delta;
+    if (next < 0 || next >= frameCount) return;
+    loadWindow(next);
+  }
+
+  function updateSeekLabel() {
+    const label = document.getElementById('sf-seek-label');
+    if (!label) return;
+    const cur = selectedIndex >= 0 ? selectedIndex : startIndex;
+    label.textContent = `Frame ${cur} / ${Math.max(0, frameCount - 1)} · ${fmtTime(cur / fps)}`;
+  }
+
+  function updateSaveButton() {
+    const btn = document.getElementById('sf-save');
+    if (btn) btn.disabled = selectedIndex < 0;
+  }
+
+  async function saveSelectedFrame() {
+    if (!asset || selectedIndex < 0) return;
+    const btn = document.getElementById('sf-save');
+    const orig = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…'; }
+    try {
+      const res = await apiPost('/frames/save', { asset_id: asset.id, frame_index: selectedIndex });
+      if (res && res.success) {
+        showToast('Frame saved to Library');
+        try { await refreshLibraryFromDB(); } catch (_) {}
+      } else {
+        showToast((res && res.error) || 'Save failed', 'error');
+      }
+    } catch (e) {
+      showToast('Save failed: ' + e.message, 'error');
+    } finally {
+      if (btn) btn.innerHTML = orig;
+      updateSaveButton();
+    }
+  }
+
+  renderShell();
 }
 
 document.addEventListener('DOMContentLoaded', init);

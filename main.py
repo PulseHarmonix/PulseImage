@@ -11,14 +11,18 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 
 # === Local Application ===
-from routers import chat, director, generations, uploads, settings,ollama,comfy,admin
+from routers import generations, uploads, settings, ollama, comfy, admin, music, frames, tts
 from services.settings_service import refresh_loras
 from services.database_service import init_db
+from services.music_video_service import reset_interrupted_segments
+from config import ensure_settings_in_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Initialize DB and refresh LoRAs on startup; clean up on shutdown."""
     init_db()
+    reset_interrupted_segments()
+    ensure_settings_in_db()
     await refresh_loras()
     yield
 
@@ -48,9 +52,10 @@ app.include_router(generations.router)
 app.include_router(settings.router)
 app.include_router(ollama.router)
 app.include_router(comfy.router)
-app.include_router(director.router)
-app.include_router(chat.router)
+app.include_router(music.router)
+app.include_router(frames.router)
 app.include_router(admin.router)
+app.include_router(tts.router)
 app.mount("/images", StaticFiles(directory="images"), name="images")
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 app.mount("/audio", StaticFiles(directory="audio"), name="audio")

@@ -1,3 +1,5 @@
+import json
+
 from config import get_ollama_settings
 
 async def check_ollama_connection() -> bool:
@@ -36,16 +38,21 @@ async def fetch_ollama_models() -> list[str]:
         print(f"[ollama] fetch models error: {e}")
     return []
 
-async def ollama_chat(
-    messages: list,
+async def ollama_generate(
+    prompt: str,
+    system: str | None = None,
+    expect_json: bool = False,
+    force_json_format: bool = False,
     model: str | None = None,
     timeout: int | None = None,
 ) -> dict:
-    """
-    Call Ollama /api/chat with a messages array (role/content).
-    Returns {"text": str, "error": str|None} (text is the assistant content).
+    """Call Ollama /api/generate and return {"text", "parsed", "error"}.
+
+    - expect_json=True → attempt to parse the response as JSON (tolerant extraction)
+    - force_json_format=True → send "format": "json" to Ollama (can hurt some models)
     """
     import httpx
+
     oll = get_ollama_settings()
     url = oll["url"]
     mdl = model or oll["model"]
@@ -53,19 +60,35 @@ async def ollama_chat(
 
     payload = {
         "model": mdl,
-        "messages": messages,
+        "prompt": prompt,
         "stream": False,
     }
+    if system:
+        payload["system"] = system
+    if force_json_format:
+        payload["format"] = "json"
 
     try:
         async with httpx.AsyncClient(timeout=float(tmo)) as client:
-            resp = await client.post(f"{url}/api/chat", json=payload)
+            resp = await client.post(f"{url}/api/generate", json=payload)
             resp.raise_for_status()
             data = resp.json()
-            msg = data.get("message") or {}
-            text = (msg.get("content") or "").strip()
-            return {"text": text, "error": None}
+            text = (data.get("response") or "").strip()
+            parsed = None
+            err = None
+            if expect_json and text:
+                candidate = text
+                if not (candidate.startswith("{") or candidate.startswith("[")):
+                    import re
+                    m = re.search(r'(\{.*\}|\[.*\])', candidate, re.DOTALL)
+                    if m:
+                        candidate = m.group(1)
+                try:
+                    parsed = json.loads(candidate)
+                except Exception as je:
+                    err = f"JSON parse failed: {je}. Raw head: {text[:200]}"
+            return {"text": text, "parsed": parsed, "error": err}
     except httpx.HTTPStatusError as e:
-        return {"text": "", "error": f"Ollama HTTP {e.response.status_code}: {e.response.text[:300]}"}
+        return {"text": "", "parsed": None, "error": f"Ollama HTTP {e.response.status_code}: {e.response.text[:300]}"}
     except Exception as e:
-        return {"text": "", "error": f"Ollama chat failed ({type(e).__name__}): {e}"}
+        return {"text": "", "parsed": None, "error": f"Ollama call failed ({type(e).__name__}): {e}"}

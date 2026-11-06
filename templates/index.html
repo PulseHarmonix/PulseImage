@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pulse Image — Desktop</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/static/index/css/style.css">
+    <link rel="stylesheet" href="/static/index/css/style.css?v=relayvsr1">
 </head>
 <body>
     <!-- Menu Bar -->
@@ -32,10 +32,6 @@
                     <div class="menu-divider"></div>
                     <div class="menu-item" data-action="library-editor"><i class="fa-solid fa-th-large"></i> Library Editor</div>
                     <div class="menu-divider"></div>
-                    <div class="menu-item" data-action="chat-history-editor"><i class="fa-solid fa-comments"></i> Chat History Editor</div>
-                    <div class="menu-divider"></div>
-                    <div class="menu-item" data-action="director-data-editor"><i class="fa-solid fa-clapperboard"></i> Director Data Editor</div>
-                    <div class="menu-divider"></div>
                     <div class="menu-item" data-action="generate-thumbnails"><i class="fa-solid fa-image"></i> Generate All Thumbnails</div>
                 </div>
             </div>
@@ -44,6 +40,7 @@
                 <div class="menubar-dropdown" id="menu-models-dropdown">
                     <div class="menu-item" data-action="image-gen"><i class="fa-solid fa-wand-magic-sparkles"></i> Image Generation</div>
                     <div class="menu-item" data-action="image-edit"><i class="fa-solid fa-pen"></i> Image Edit</div>
+                    <div class="menu-item" data-action="video-gen"><i class="fa-solid fa-film"></i> Video Generation</div>
                     <div class="menu-item" data-action="loras"><i class="fa-solid fa-layer-group"></i> LoRAs</div>
                     <div class="menu-item" data-action="workflow-models"><i class="fa-solid fa-cubes"></i> Workflow Models</div>
                 </div>
@@ -78,13 +75,13 @@
                 <div class="icon-box icon-box-green"><i class="fa-solid fa-th-large"></i></div>
                 <span>Library</span>
             </div>
-            <div class="desk-icon" data-app="chat" title="Chat">
-                <div class="icon-box icon-box-violet"><i class="fa-solid fa-robot"></i></div>
-                <span>Chat</span>
+            <div class="desk-icon" data-app="musicvideo" title="Music Video">
+                <div class="icon-box icon-box-indigo"><i class="fa-solid fa-music"></i></div>
+                <span>Music Video</span>
             </div>
-            <div class="desk-icon" data-app="director" title="Director">
-                <div class="icon-box icon-box-amber"><i class="fa-solid fa-clapperboard"></i></div>
-                <span>Director</span>
+            <div class="desk-icon" data-app="singleframe" title="Single Frame">
+                <div class="icon-box icon-box-teal"><i class="fa-solid fa-camera-retro"></i></div>
+                <span>Single Frame</span>
             </div>
         </div>
 
@@ -98,10 +95,16 @@
     <!-- Bottom Prompt Bar -->
     <div id="bottom-bar" class="bottom-bar">
         <div class="bb-inner">
+            <div id="bb-tabs" class="bb-tabs"></div>
             <div class="bb-row bb-options">
                 <div class="bb-mode-group">
                     <button class="bb-mode active" data-mode="image"><i class="fa-solid fa-image"></i> Image</button>
                     <button class="bb-mode" data-mode="video"><i class="fa-solid fa-video"></i> Video</button>
+                    <button class="bb-mode" data-mode="speech"><i class="fa-solid fa-microphone-lines"></i> Speech</button>
+                </div>
+                <div class="bb-model-wrap" id="bb-model-wrap">
+                    <button type="button" id="bb-model-badge" class="bb-model-badge"></button>
+                    <div class="bb-model-menu" id="bb-model-menu"></div>
                 </div>
                 <div class="bb-res-group">
                     <button class="bb-pill" data-res="480p">480p</button>
@@ -128,19 +131,30 @@
                     <button class="bb-duration-pill" data-dur="50">50s</button>
                     <button class="bb-duration-pill" data-dur="60">60s</button>
                 </div>
+                <div id="bb-upscale-wrap" class="bb-auto-prompt-wrap" style="display:none">
+                    <button type="button" id="bb-upscale-btn" class="bb-auto-prompt-btn" title="RelayVSR 2x post-upscale" aria-pressed="false">2&times;</button>
+                </div>
                 <div class="bb-enhance-wrap">
                     <button class="bb-enhance-btn" id="bb-enhance-btn"><span id="bb-enhance-text">No enhancement</span> <i class="fa-solid fa-chevron-down" style="font-size:8px;margin-left:3px"></i></button>
                     <div class="bb-enhance-menu" id="bb-enhance-menu"></div>
                 </div>
+                <button id="bb-prompt-help" class="bb-prompt-help" style="display:none" title="How to write the prompt"><i class="fa-solid fa-circle-question"></i></button>
+                <div id="bb-auto-prompt-wrap" class="bb-auto-prompt-wrap" style="display:none">
+                    <label class="bb-auto-prompt-toggle" title="Use the FastH3 auto prompt builder">
+                        <input type="checkbox" id="bb-auto-prompt-enabled"> Auto Prompt
+                    </label>
+                    <button type="button" id="bb-auto-prompt-setup" class="bb-auto-prompt-btn" title="Set up the auto prompt"><i class="fa-solid fa-sliders"></i> Setup</button>
+                </div>
+                <div id="bb-speech-wrap" class="bb-auto-prompt-wrap" style="display:none"><button type="button" id="bb-speech-setup" class="bb-auto-prompt-btn" title="Voice, emotion and transcript"><i class="fa-solid fa-microphone-lines"></i> Voice Setup</button></div>
             </div>
             <div class="bb-row bb-input-row">
                 <button class="bb-plus"><i class="fa-solid fa-plus"></i></button>
-                <input type="text" id="bb-input" class="bb-input" placeholder="Type to image" autofocus>
+                <textarea id="bb-input" class="bb-input" rows="1" placeholder="Type to image" autofocus></textarea>
                 <button id="bb-send" class="bb-send"><i class="fa-solid fa-arrow-up"></i><span id="bb-queue-badge" class="bb-queue-badge" style="display:none"></span></button>
             </div>
         </div>
     </div>
 
-    <script src="/static/index/js/app.js"></script>
+    <script src="/static/index/js/app.js?v=relayvsr1"></script>
 </body>
 </html>
