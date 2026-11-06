@@ -1,0 +1,38 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "Zonos2EmotionModelLoader", "inputs": {
+    "model": "ZONOS2 FP8 Mixed - drbaph/ZONOS2-FP8",
+    "dtype": "auto",
+    "attention": "auto",
+    "download_if_missing": true
+  }},
+  "3": {"class_type": "Zonos2EmotionVoiceClone", "inputs": {
+    "zonos2_model": ["2", 0],
+    "text": "",
+    "reference_audio": ["1", 0],
+    "clean_speaker_background": false,
+    "accurate_mode": true,
+    "max_new_tokens": 1024,
+    "temperature": 1.15,
+    "top_k": 106,
+    "top_p": 0.0,
+    "min_p": 0.18,
+    "repetition_window": 50,
+    "repetition_penalty": 1.2,
+    "repetition_codebooks": 8,
+    "speaking_rate": "default",
+    "loudness_lufs": "default",
+    "estimated_snr": "default",
+    "maximum_pause": "default",
+    "estimated_bandlimit_hz": "default",
+    "leading_silence": "default",
+    "trailing_silence": "3: 0.25-0.5",
+    "seed": 0,
+    "emotion": "none",
+    "emotion_strength": 1.0,
+    "emotion_valence": 0.0,
+    "emotion_arousal": 0.0,
+    "emotion_cfg_scale": 1.0
+  }},
+  "4": {"class_type": "SaveAudio", "inputs": {"audio": ["3", 0], "filename_prefix": "audio/zonos2"}}
+}

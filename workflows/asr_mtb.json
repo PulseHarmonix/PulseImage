@@ -1,0 +1,20 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "Load Whisper (mtb)", "inputs": {
+    "model_size": "small",
+    "download_missing": true
+  }},
+  "3": {"class_type": "Audio To Text (mtb)", "inputs": {
+    "pipeline": ["2", 0],
+    "audio": ["1", 0],
+    "language": "en",
+    "return_timestamps": false
+  }},
+  "4": {"class_type": "SaveText|pysssss", "inputs": {
+    "root_dir": "input",
+    "file": "",
+    "append": "overwrite",
+    "insert": false,
+    "text": ["3", 0]
+  }}
+}

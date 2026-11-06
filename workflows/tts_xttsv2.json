@@ -1,0 +1,15 @@
+{
+  "1": {"class_type": "LoadAudioPath", "inputs": {"audio": ""}},
+  "2": {"class_type": "XTTS_INFER", "inputs": {
+    "audio": ["1", 0],
+    "text": "",
+    "language": "en",
+    "temperature": 0.65,
+    "length_penalty": 1.0,
+    "repetition_penalty": 2.0,
+    "top_k": 50,
+    "top_p": 0.8,
+    "speed": 1.0
+  }},
+  "3": {"class_type": "PreViewAudio", "inputs": {"audio": ["2", 0]}}
+}

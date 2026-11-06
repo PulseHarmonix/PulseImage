@@ -1,0 +1,20 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "IndexTTS2Run", "inputs": {
+    "audio": ["1", 0],
+    "text": "",
+    "top_k": 30,
+    "top_p": 0.8,
+    "temperature": 0.8,
+    "num_beams": 3,
+    "max_mel_tokens": 1500,
+    "max_text_tokens_per_sentence": 120,
+    "custom_cuda_kernel": false,
+    "deepspeed": true,
+    "unload_model": true,
+    "use_emo_text": false,
+    "emo_text": "",
+    "emo_alpha": 1.0
+  }},
+  "3": {"class_type": "SaveAudio", "inputs": {"audio": ["2", 0], "filename_prefix": "audio/indextts2"}}
+}

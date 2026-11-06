@@ -1,0 +1,24 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "FB_Qwen3TTSVoiceClonePrompt", "inputs": {
+    "ref_audio": ["1", 0],
+    "ref_text": "",
+    "model_choice": "1.7B",
+    "device": "auto",
+    "precision": "bf16",
+    "attention": "sdpa",
+    "x_vector_only": true
+  }},
+  "3": {"class_type": "FB_Qwen3TTSVoiceClone", "inputs": {
+    "target_text": "",
+    "model_choice": "1.7B",
+    "device": "auto",
+    "precision": "bf16",
+    "language": "English",
+    "voice_clone_prompt": ["2", 0],
+    "seed": 0,
+    "max_new_tokens": 2048,
+    "attention": "sdpa"
+  }},
+  "4": {"class_type": "SaveAudio", "inputs": {"audio": ["3", 0], "filename_prefix": "audio/qwen3tts"}}
+}

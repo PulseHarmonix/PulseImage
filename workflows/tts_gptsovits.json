@@ -1,0 +1,43 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "Load Whisper (mtb)", "inputs": {
+    "model_size": "small",
+    "download_missing": true
+  }},
+  "3": {"class_type": "Audio To Text (mtb)", "inputs": {
+    "pipeline": ["2", 0],
+    "audio": ["1", 0],
+    "language": "en",
+    "return_timestamps": false
+  }},
+  "4": {"class_type": "TextDictNode", "inputs": {
+    "text": "",
+    "language": "English"
+  }},
+  "5": {"class_type": "TextDictNode", "inputs": {
+    "text": ["3", 0],
+    "language": "English"
+  }},
+  "6": {"class_type": "ExperienceNode", "inputs": {
+    "exp_name": "aifsh",
+    "version": "v2",
+    "is_half": true,
+    "if_redataset": true,
+    "if_ft_sovits": true,
+    "if_ft_gpt": true
+  }},
+  "7": {"class_type": "GSVTTSNode", "inputs": {
+    "text_dict": ["4", 0],
+    "prompt_text_dict": ["5", 0],
+    "prompt_audio": ["1", 0],
+    "config": ["6", 0],
+    "GPT_weight": "gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
+    "SoVITS_weight": "gsv-v2final-pretrained/s2G2333k.pth",
+    "how_to_cut": "Slice once every 4 sentences",
+    "speed": 1.0,
+    "top_k": 15,
+    "top_p": 1.0,
+    "temperature": 1.0
+  }},
+  "8": {"class_type": "SaveAudio", "inputs": {"audio": ["7", 0], "filename_prefix": "audio/gptsovits"}}
+}

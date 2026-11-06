@@ -1,0 +1,20 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+  "2": {"class_type": "F5TTSAudioAdvanced", "inputs": {
+    "sample": "",
+    "speech": "",
+    "seed": 0,
+    "model": "F5v1",
+    "vocoder": "auto",
+    "speed": 1.0,
+    "model_type": "F5TTS_v1_Base",
+    "target_rms": 0.1,
+    "cross_fade_duration": 0.15,
+    "nfe_step": 32,
+    "cfg_strength": 2.0,
+    "sway_sampling_coef": -1.0,
+    "speed_type": "torch-time-stretch",
+    "fix_duration": -1.0
+  }},
+  "3": {"class_type": "SaveAudio", "inputs": {"audio": ["2", 0], "filename_prefix": "audio/f5tts"}}
+}
