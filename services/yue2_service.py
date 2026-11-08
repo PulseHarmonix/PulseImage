@@ -115,6 +115,11 @@ def build_text_workflow(
     top_k: int,
     repetition_penalty: float,
     cfg_scale: float,
+    abc_temperature: float,
+    abc_top_p: float,
+    abc_top_k: int,
+    abc_repetition_penalty: float,
+    abc_penalty_window: int,
 ) -> dict:
     workflow = _load_workflow(TEXT_WORKFLOW)
     workflow["33:15"]["inputs"]["ckpt_name"] = CHECKPOINT
@@ -137,11 +142,11 @@ def build_text_workflow(
                 "seed": ["33:34", 0],
                 "mode": planning,
                 "max_abc_tokens": max_score_tokens,
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "top_k": 30,
-                "repetition_penalty": 1.005,
-                "penalty_window": 100,
+                "temperature": abc_temperature,
+                "top_p": abc_top_p,
+                "top_k": abc_top_k,
+                "repetition_penalty": abc_repetition_penalty,
+                "penalty_window": abc_penalty_window,
             }
         )
 
@@ -381,6 +386,7 @@ async def _save_audio_result(
     acoustic_steps: int,
     max_score_tokens: int,
     extra_metadata: dict | None = None,
+    sampling: dict | None = None,
 ) -> dict:
     audio_info = _find_audio_output(outputs)
     if not audio_info:
@@ -423,6 +429,8 @@ async def _save_audio_result(
         }
         if extra_metadata:
             metadata.update(extra_metadata)
+        if sampling is not None:
+            metadata["sampling"] = sampling
         score_abc = _extract_text(outputs, COVER_SCORE_NODE if extra_metadata and extra_metadata.get("cover_of") else TEXT_SCORE_NODE)
         if score_abc:
             metadata["score_abc"] = score_abc
@@ -437,6 +445,8 @@ async def _save_audio_result(
             "max_score_tokens": max_score_tokens,
             "score_abc": score_abc or "",
         }
+        if sampling is not None:
+            metadata["plan"]["sampling"] = sampling
 
         asset_id = save_generation(
             prompt=prompt,
@@ -467,7 +477,7 @@ async def generate_song(
     lyrics: str,
     title: str = "",
     planning: str = "full",
-    max_duration: int = 600,
+    max_duration: int = 300,
     acoustic_steps: int = 32,
     max_score_tokens: int = 8192,
     seed: int = 0,
@@ -479,6 +489,11 @@ async def generate_song(
     guidance: float = 1.0,
     tile_frames: int = 1024,
     download_missing: bool = True,
+    abc_temperature: float = 0.7,
+    abc_top_p: float = 0.9,
+    abc_top_k: int = 30,
+    abc_repetition_penalty: float = 1.005,
+    abc_penalty_window: int = 100,
 ) -> dict:
     capabilities = await get_yue2_capabilities()
     if not capabilities.get("available"):
@@ -497,7 +512,7 @@ async def generate_song(
     if planning_mode not in PLANNING_MODES:
         return {"success": False, "error": "Invalid planning mode"}
 
-    max_duration_val = _clamp_int(max_duration, 8, 600, 600)
+    max_duration_val = _clamp_int(max_duration, 8, 600, 300)
     acoustic_steps_val = _clamp_int(acoustic_steps, 1, 64, 32)
     max_score_tokens_val = _clamp_int(max_score_tokens, 1, 20000, 8192)
     seed_val = _clamp_int(seed, 0, 0xFFFFFFFFFFFFFFFF, 0)
@@ -506,6 +521,13 @@ async def generate_song(
     top_k_val = _clamp_int(top_k, 1, 32768, 100)
     repetition_penalty_val = _clamp_float(repetition_penalty, 0.01, 10.0, 1.2)
     cfg_scale_val = _clamp_float(guidance, 0.0, 20.0, 1.0)
+    abc_temperature_val = _clamp_float(abc_temperature, 0.0, 5.0, 0.7)
+    abc_top_p_val = _clamp_float(abc_top_p, 0.01, 1.0, 0.9)
+    abc_top_k_val = _clamp_int(abc_top_k, 1, 32768, 30)
+    abc_repetition_penalty_val = _clamp_float(
+        abc_repetition_penalty, 0.01, 10.0, 1.005
+    )
+    abc_penalty_window_val = _clamp_int(abc_penalty_window, 1, 20000, 100)
 
     workflow = build_text_workflow(
         style_text,
@@ -520,6 +542,11 @@ async def generate_song(
         top_k_val,
         repetition_penalty_val,
         cfg_scale_val,
+        abc_temperature_val,
+        abc_top_p_val,
+        abc_top_k_val,
+        abc_repetition_penalty_val,
+        abc_penalty_window_val,
     )
     outputs, error = await _run_workflow(workflow, job_id)
     if error or not outputs:
@@ -534,6 +561,22 @@ async def generate_song(
         max_duration_val,
         acoustic_steps_val,
         max_score_tokens_val,
+        sampling={
+            "abc": {
+                "temperature": abc_temperature_val,
+                "top_p": abc_top_p_val,
+                "top_k": abc_top_k_val,
+                "repetition_penalty": abc_repetition_penalty_val,
+                "penalty_window": abc_penalty_window_val,
+            },
+            "music": {
+                "temperature": temperature_val,
+                "top_p": top_p_val,
+                "top_k": top_k_val,
+                "repetition_penalty": repetition_penalty_val,
+                "guidance": cfg_scale_val,
+            },
+        },
     )
 
 
@@ -542,7 +585,7 @@ async def generate_cover(
     style: str,
     lyrics: str,
     title: str = "",
-    max_duration: int = 600,
+    max_duration: int = 300,
     acoustic_steps: int = 32,
     max_score_tokens: int = 8192,
     seed: int = 0,
@@ -569,7 +612,7 @@ async def generate_cover(
     if not comfy_audio:
         return {"success": False, "error": "Failed to upload source audio to ComfyUI"}
 
-    max_duration_val = _clamp_int(max_duration, 8, 600, 600)
+    max_duration_val = _clamp_int(max_duration, 8, 600, 300)
     acoustic_steps_val = _clamp_int(acoustic_steps, 1, 64, 32)
     max_score_tokens_val = _clamp_int(max_score_tokens, 1, 20000, 8192)
     seed_val = _clamp_int(seed, 0, 0xFFFFFFFFFFFFFFFF, 0)
@@ -606,4 +649,13 @@ async def generate_cover(
         acoustic_steps_val,
         max_score_tokens_val,
         extra_metadata={"cover_of": asset_id, "cover_source": asset["filename"]},
+        sampling={
+            "music": {
+                "temperature": temperature_val,
+                "top_p": top_p_val,
+                "top_k": top_k_val,
+                "repetition_penalty": repetition_penalty_val,
+                "guidance": cfg_scale_val,
+            },
+        },
     )

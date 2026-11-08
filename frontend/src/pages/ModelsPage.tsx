@@ -13,7 +13,14 @@ import {
   Video,
   Zap,
 } from 'lucide-react'
-import { useComfyStatus, useRelayCapabilities, useSettings, useTtsEngines, useUpdateSettings } from '../lib/queries'
+import {
+  useComfyStatus,
+  useRelayCapabilities,
+  useSettings,
+  useStemCapabilities,
+  useTtsEngines,
+  useUpdateSettings,
+} from '../lib/queries'
 import { apiGet } from '../lib/api'
 import { PageHeader } from '../components/shell/PageHeader'
 import { Badge, Button, Select } from '../components/ui'
@@ -94,6 +101,7 @@ export function ModelsPage() {
   const engines = useTtsEngines()
   const comfy = useComfyStatus()
   const relay = useRelayCapabilities()
+  const stems = useStemCapabilities()
   const updateSettings = useUpdateSettings()
   const toast = useUiStore((s) => s.toast)
   const [models, setModels] = useState<ComfyModels>(emptyModels)
@@ -154,7 +162,17 @@ export function ModelsPage() {
 
   const data = settings.data
   const relayStatus = relay.data?.relayvsr
+  const stemStatus = stems.data
   const enhancers = data?.prompt_enhancers ?? []
+  const stemLabel = !stemStatus
+    ? 'Checking'
+    : stemStatus.available
+      ? 'Ready'
+      : !stemStatus.comfy_connected
+        ? 'ComfyUI offline'
+        : !stemStatus.node_installed
+          ? 'Node missing'
+          : 'Unavailable'
 
   const workflowProgress = useMemo(() => {
     let present = 0
@@ -323,6 +341,49 @@ export function ModelsPage() {
             <AssetCount label="VAEs" count={models.vaes?.length} />
             <AssetCount label="CLIPs" count={models.clips?.length} />
             <AssetCount label="Upscalers" count={models.upscalers?.length} />
+          </div>
+        </Panel>
+        <Panel icon={<Layers3 className="size-4" />} title="Stems" subtitle="Audio stem separation">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] p-3">
+            <div>
+              <p className="text-xs font-medium">Status</p>
+              <p className="mt-0.5 text-[11px] text-text-3">
+                {stemStatus?.available
+                  ? 'Separation node is installed. The model downloads on first use.'
+                  : stemStatus?.error || 'ComfyUI-Demucs-AudioSeparator'}
+              </p>
+            </div>
+            <Badge tone={!stemStatus ? 'default' : stemStatus.available ? 'success' : 'danger'}>
+              {stemLabel}
+            </Badge>
+          </div>
+          <div className="mt-3 space-y-2 text-[11px]">
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-line px-3 py-2">
+              <span className="text-text-3">Node</span>
+              <span className="truncate font-mono text-[10px] text-text-2">
+                ComfyUI-Demucs-AudioSeparator
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-line px-3 py-2">
+              <span className="text-text-3">Model</span>
+              <span className="font-mono text-[10px] text-text-2">
+                {stemStatus?.model || 'htdemucs_6s'}
+              </span>
+            </div>
+          </div>
+          <p className="mt-2 text-[10px] text-text-3">
+            The model downloads on first separation. Install ComfyUI-Demucs-AudioSeparator in ComfyUI,
+            then restart ComfyUI.
+          </p>
+          <div className="mt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void stems.refetch()}
+              busy={stems.isFetching}
+            >
+              <RefreshCcw className="size-3.5" /> Refresh
+            </Button>
           </div>
         </Panel>
       </div>

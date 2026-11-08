@@ -26,6 +26,7 @@ import { useQueueStore } from '../stores/queue'
 import { confirmAction } from '../stores/confirm'
 import { useUiStore } from '../stores/ui'
 import { useMusicGeneratorStore } from '../stores/musicGenerator'
+import { useStemsStore } from '../stores/stems'
 import { PageHeader } from '../components/shell/PageHeader'
 import { ScorePanel } from '../components/music/ScorePanel'
 import { Badge, Button, EmptyState, Input, Select, Spinner, Textarea } from '../components/ui'
@@ -88,6 +89,7 @@ export function MusicGeneratorPage() {
   const toast = useUiStore((s) => s.toast)
   const inspectorId = useUiStore((s) => s.inspectorId)
   const openInspector = useUiStore((s) => s.openInspector)
+  const openStems = useStemsStore((s) => s.openStems)
   const lyricsRef = useRef<HTMLTextAreaElement>(null)
   const persisted = useMusicGeneratorStore((s) => s.values)
   const updatePersisted = useMusicGeneratorStore((s) => s.update)
@@ -108,6 +110,13 @@ export function MusicGeneratorPage() {
   const [topK, setTopK] = useState(persisted.topK)
   const [repetitionPenalty, setRepetitionPenalty] = useState(persisted.repetitionPenalty)
   const [guidance, setGuidance] = useState(persisted.guidance)
+  const [abcTemperature, setAbcTemperature] = useState(persisted.abcTemperature)
+  const [abcTopP, setAbcTopP] = useState(persisted.abcTopP)
+  const [abcTopK, setAbcTopK] = useState(persisted.abcTopK)
+  const [abcRepetitionPenalty, setAbcRepetitionPenalty] = useState(
+    persisted.abcRepetitionPenalty,
+  )
+  const [abcPenaltyWindow, setAbcPenaltyWindow] = useState(persisted.abcPenaltyWindow)
   const [submitting, setSubmitting] = useState(false)
   const [lastResult, setLastResult] = useState<SongResult | null>(null)
   const [scoreView, setScoreView] = useState<ScoreView | null>(null)
@@ -187,6 +196,11 @@ export function MusicGeneratorPage() {
       topK,
       repetitionPenalty,
       guidance,
+      abcTemperature,
+      abcTopP,
+      abcTopK,
+      abcRepetitionPenalty,
+      abcPenaltyWindow,
     })
   }, [
     title,
@@ -205,6 +219,11 @@ export function MusicGeneratorPage() {
     topK,
     repetitionPenalty,
     guidance,
+    abcTemperature,
+    abcTopP,
+    abcTopK,
+    abcRepetitionPenalty,
+    abcPenaltyWindow,
     updatePersisted,
   ])
 
@@ -310,6 +329,11 @@ export function MusicGeneratorPage() {
           top_k: topK,
           repetition_penalty: repetitionPenalty,
           guidance,
+          abc_temperature: abcTemperature,
+          abc_top_p: abcTopP,
+          abc_top_k: abcTopK,
+          abc_repetition_penalty: abcRepetitionPenalty,
+          abc_penalty_window: abcPenaltyWindow,
           ...extra,
         })
         if (!result.success) throw new Error(result.error || 'Song generation failed')
@@ -330,8 +354,27 @@ export function MusicGeneratorPage() {
           maxScoreTokens,
           coverSource: path === '/songs/cover' ? selectedAudioName : undefined,
           audioFilename: result.filename,
+          sampling: {
+            ...(path === '/songs/generate'
+              ? {
+                  abc: {
+                    temperature: abcTemperature,
+                    top_p: abcTopP,
+                    top_k: abcTopK,
+                    repetition_penalty: abcRepetitionPenalty,
+                    penalty_window: abcPenaltyWindow,
+                  },
+                }
+              : {}),
+            music: {
+              temperature,
+              top_p: topP,
+              top_k: topK,
+              repetition_penalty: repetitionPenalty,
+              guidance,
+            },
+          },
         })
-        setScoreOpen(true)
         queueUpdate(queueId, {
           status: 'done',
           progress: 100,
@@ -618,78 +661,152 @@ export function MusicGeneratorPage() {
             </div>
 
             {advanced ? (
-              <div className="mt-3 grid gap-3 border-t border-line pt-3 sm:grid-cols-3 lg:grid-cols-6">
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Temperature
-                  <Input
-                    type="number"
-                    step="0.05"
-                    min={0}
-                    max={5}
-                    value={temperature}
-                    onChange={(event) => setTemperature(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Top P
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min={0.01}
-                    max={1}
-                    value={topP}
-                    onChange={(event) => setTopP(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Top K
-                  <Input
-                    type="number"
-                    min={1}
-                    max={1000}
-                    value={topK}
-                    onChange={(event) => setTopK(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Repetition
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min={0.1}
-                    max={3}
-                    value={repetitionPenalty}
-                    onChange={(event) => setRepetitionPenalty(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Guidance
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    max={20}
-                    value={guidance}
-                    onChange={(event) => setGuidance(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-[10px] text-text-3">
-                  Score tokens
-                  <Input
-                    type="number"
-                    step={128}
-                    min={1}
-                    max={20000}
-                    value={maxScoreTokens}
-                    onChange={(event) => setMaxScoreTokens(Number(event.target.value))}
-                    className="h-8 text-xs"
-                  />
-                </label>
+              <div className="mt-3 space-y-3 border-t border-line pt-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-3">
+                    ABC planning
+                  </p>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Temperature
+                      <Input
+                        type="number"
+                        step="0.05"
+                        min={0}
+                        max={5}
+                        value={abcTemperature}
+                        onChange={(event) => setAbcTemperature(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Top P
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0.01}
+                        max={1}
+                        value={abcTopP}
+                        onChange={(event) => setAbcTopP(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Top K
+                      <Input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={abcTopK}
+                        onChange={(event) => setAbcTopK(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Repetition
+                      <Input
+                        type="number"
+                        step="0.001"
+                        min={0.1}
+                        max={3}
+                        value={abcRepetitionPenalty}
+                        onChange={(event) =>
+                          setAbcRepetitionPenalty(Number(event.target.value))
+                        }
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Penalty window
+                      <Input
+                        type="number"
+                        min={1}
+                        max={20000}
+                        value={abcPenaltyWindow}
+                        onChange={(event) => setAbcPenaltyWindow(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-3">
+                    Music sampling
+                  </p>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Temperature
+                      <Input
+                        type="number"
+                        step="0.05"
+                        min={0}
+                        max={5}
+                        value={temperature}
+                        onChange={(event) => setTemperature(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Top P
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0.01}
+                        max={1}
+                        value={topP}
+                        onChange={(event) => setTopP(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Top K
+                      <Input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={topK}
+                        onChange={(event) => setTopK(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Repetition
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0.1}
+                        max={3}
+                        value={repetitionPenalty}
+                        onChange={(event) => setRepetitionPenalty(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Guidance
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        max={20}
+                        value={guidance}
+                        onChange={(event) => setGuidance(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[10px] text-text-3">
+                      Score tokens
+                      <Input
+                        type="number"
+                        step={128}
+                        min={1}
+                        max={20000}
+                        value={maxScoreTokens}
+                        onChange={(event) => setMaxScoreTokens(Number(event.target.value))}
+                        className="h-8 text-xs"
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -832,6 +949,13 @@ export function MusicGeneratorPage() {
                                 Score &amp; plan
                               </button>
                             ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openStems(song.id)}
+                              className="text-[9px] font-medium text-lime transition hover:underline"
+                            >
+                              Stems
+                            </button>
                           </div>
                         </div>
                         <button
@@ -889,6 +1013,7 @@ export function MusicGeneratorPage() {
           (lastResult?.planning === 'cover' ? selectedAudioName : undefined)
         }
         audioFilename={scoreView?.audioFilename ?? lastResult?.filename}
+        sampling={scoreView?.sampling}
       />
     </div>
   )

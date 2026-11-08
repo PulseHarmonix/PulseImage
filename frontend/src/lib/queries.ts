@@ -9,6 +9,7 @@ export const queryKeys = {
   comfyStatus: ['comfy', 'status'] as const,
   ollamaStatus: ['ollama', 'status'] as const,
   songCapabilities: ['songs', 'capabilities'] as const,
+  stemCapabilities: ['stems', 'capabilities'] as const,
   capabilities: ['comfy', 'capabilities'] as const,
 }
 
@@ -80,6 +81,21 @@ export function useSongCapabilities() {
         node_installed: boolean
         missing: string[]
       }>('/songs/capabilities'),
+    refetchInterval: 30_000,
+  })
+}
+
+export function useStemCapabilities() {
+  return useQuery({
+    queryKey: queryKeys.stemCapabilities,
+    queryFn: () =>
+      apiGet<{
+        available: boolean
+        comfy_connected: boolean
+        node_installed: boolean
+        model?: string
+        error?: string
+      }>('/stems/capabilities'),
     refetchInterval: 30_000,
   })
 }

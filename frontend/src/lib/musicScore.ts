@@ -12,6 +12,28 @@ export interface ScoreView {
   maxScoreTokens?: number
   coverSource?: string
   audioFilename?: string
+  sampling?: {
+    abc?: Record<string, number>
+    music?: Record<string, number>
+  }
+}
+
+function asNumberRecord(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const result: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) result[key] = raw
+  }
+  return Object.keys(result).length ? result : undefined
+}
+
+function parseSampling(value: unknown): ScoreView['sampling'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const abc = asNumberRecord(record.abc)
+  const music = asNumberRecord(record.music)
+  if (!abc && !music) return undefined
+  return { abc, music }
 }
 
 export function scoreViewFromAsset(asset: Asset): ScoreView {
@@ -52,6 +74,7 @@ export function scoreViewFromAsset(asset: Asset): ScoreView {
           ? meta.cover_source
           : undefined,
     audioFilename: asset.filename,
+    sampling: parseSampling(plan.sampling ?? meta.sampling),
   }
 }
 

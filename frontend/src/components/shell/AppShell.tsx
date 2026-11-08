@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar'
 import { QueuePanel } from './QueuePanel'
 import { PromptDock } from '../prompt/PromptDock'
 import { AssetInspector } from '../media/AssetInspector'
+import { StemPanel } from '../music/StemPanel'
 import { ConfirmDialog, Toaster } from '../ui'
 import { useUiStore } from '../../stores/ui'
 import { cn } from '../../lib/utils'
@@ -45,6 +46,7 @@ export function AppShell() {
       {showDock ? <PromptDock /> : null}
       <QueuePanel />
       <AssetInspector />
+      <StemPanel />
       <ConfirmDialog />
       <Toaster />
     </div>

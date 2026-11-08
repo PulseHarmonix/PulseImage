@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 # === Local Application ===
-from routers import generations, uploads, settings, ollama, comfy, admin, music, frames, tts, songs
+from routers import generations, uploads, settings, ollama, comfy, admin, music, frames, tts, songs, stems
 from services.settings_service import refresh_loras
 from services.database_service import init_db
 from services.music_video_service import reset_interrupted_segments
@@ -59,6 +59,7 @@ app.include_router(frames.router)
 app.include_router(admin.router)
 app.include_router(tts.router)
 app.include_router(songs.router)
+app.include_router(stems.router)
 app.mount("/images", StaticFiles(directory="images"), name="images")
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 app.mount("/audio", StaticFiles(directory="audio"), name="audio")

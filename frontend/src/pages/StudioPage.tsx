@@ -13,6 +13,7 @@ import { Badge, Button, EmptyState } from '../components/ui'
 import { usePromptStore } from '../stores/prompt'
 import { useUiStore } from '../stores/ui'
 import { assetType } from '../lib/utils'
+import { isStemAsset } from '../lib/stems'
 
 export function StudioPage() {
   const history = useHistory()
@@ -23,7 +24,7 @@ export function StudioPage() {
     setComposerOpen(true)
   }
   const assets = history.data ?? []
-  const recent = assets.slice(0, 12)
+  const recent = assets.filter((asset) => !isStemAsset(asset)).slice(0, 12)
   const counts = {
     images: assets.filter((asset) => assetType(asset) === 'image').length,
     videos: assets.filter((asset) => assetType(asset) === 'video').length,

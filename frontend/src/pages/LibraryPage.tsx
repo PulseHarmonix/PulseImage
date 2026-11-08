@@ -7,6 +7,7 @@ import {
   Grid2X2,
   Heart,
   Image as ImageIcon,
+  Layers3,
   LayoutGrid,
   Music2,
   Search,
@@ -32,7 +33,7 @@ import { assetType, cn, parseMetadata } from '../lib/utils'
 import type { Asset } from '../types'
 
 
-type FilterKey = 'image' | 'video' | 'audio' | 'music' | 'voice' | 'character' | 'favorite'
+type FilterKey = 'image' | 'video' | 'audio' | 'music' | 'voice' | 'character' | 'favorite' | 'stems'
 
 const filters: { key: FilterKey; label: string; icon: typeof ImageIcon }[] = [
   { key: 'image', label: 'Images', icon: ImageIcon },
@@ -40,6 +41,7 @@ const filters: { key: FilterKey; label: string; icon: typeof ImageIcon }[] = [
   { key: 'audio', label: 'Audio', icon: AudioLines },
   { key: 'music', label: 'Music', icon: Music2 },
   { key: 'voice', label: 'Voices', icon: AudioLines },
+  { key: 'stems', label: 'Stems', icon: Layers3 },
   { key: 'character', label: 'Characters', icon: User },
   { key: 'favorite', label: 'Favorites', icon: Heart },
 ]
@@ -56,15 +58,18 @@ export function LibraryPage() {
     const search = query.trim().toLowerCase()
     const typeFilters: FilterKey[] = active.filter((key) => key === 'image' || key === 'video' || key === 'audio')
     const flags = active.filter((key) => key !== 'image' && key !== 'video' && key !== 'audio')
+    const stemsActive = active.includes('stems')
 
     return assets.filter((asset) => {
       const type = assetType(asset)
+      const meta = parseMetadata(asset)
+      const isStem = meta.source === 'stems' || meta.kind === 'stem'
+      if (stemsActive ? !isStem : isStem) return false
       if (typeFilters.length && !typeFilters.includes(type as FilterKey)) return false
       if (flags.includes('favorite') && !asset.favorite) return false
       if (flags.includes('character') && !asset.character) return false
       if (flags.includes('voice') && !asset.voice) return false
       if (flags.includes('music')) {
-        const meta = parseMetadata(asset)
         if (type !== 'audio' || !(meta.source === 'yue2' || meta.is_music === true)) {
           return false
         }
@@ -73,6 +78,19 @@ export function LibraryPage() {
       return `${asset.prompt || ''} ${asset.filename}`.toLowerCase().includes(search)
     })
   }, [active, history.data, query])
+
+  const stemCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const asset of history.data ?? []) {
+      const meta = parseMetadata(asset)
+      if (!(meta.source === 'stems' || meta.kind === 'stem')) continue
+      const stem = meta.stem as { parent_id?: string } | undefined
+      const parentId = asset.parent_id ?? stem?.parent_id
+      if (!parentId) continue
+      counts.set(parentId, (counts.get(parentId) ?? 0) + 1)
+    }
+    return counts
+  }, [history.data])
 
   const visible = filtered.slice(0, limit)
 
@@ -496,6 +514,7 @@ export function LibraryPage() {
               selectedIds={selectedIds}
               highlightedId={inspectorId}
               onToggleSelect={toggleSelect}
+              stemCounts={stemCounts}
             />
             {filtered.length > visible.length ? (
               <div className="flex justify-center pt-4">

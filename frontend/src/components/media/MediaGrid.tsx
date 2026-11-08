@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent, type MouseEvent } from 'react'
-import { Check, Heart, Image as ImageIcon, Play, Star, User, Volume2, Zap } from 'lucide-react'
+import { Check, Heart, Image as ImageIcon, Layers3, Play, Star, User, Volume2, Zap } from 'lucide-react'
 import { useUiStore } from '../../stores/ui'
 import { mediaUrl } from '../../lib/api'
 import { dispatchAttachAsset, dragPayload } from '../../lib/assets'
@@ -13,6 +13,7 @@ export function MediaCard({
   selected = false,
   highlighted = false,
   selectMode = false,
+  stemCount,
   onToggleSelect,
 }: {
   asset: Asset
@@ -20,6 +21,7 @@ export function MediaCard({
   selected?: boolean
   highlighted?: boolean
   selectMode?: boolean
+  stemCount?: number
   onToggleSelect?: (asset: Asset) => void
 }) {
   const openInspector = useUiStore((s) => s.openInspector)
@@ -126,6 +128,11 @@ export function MediaCard({
             <Zap className="size-2.5" /> 2×
           </Badge>
         ) : null}
+        {stemCount ? (
+          <Badge className="bg-black/55 backdrop-blur">
+            <Layers3 className="size-2.5" /> {stemCount} stems
+          </Badge>
+        ) : null}
       </div>
 
       <div className="absolute right-2 top-2 flex gap-1">
@@ -181,6 +188,7 @@ export function MediaGrid({
   selectMode = false,
   selectedIds,
   highlightedId,
+  stemCounts,
   onToggleSelect,
 }: {
   assets: Asset[]
@@ -189,6 +197,7 @@ export function MediaGrid({
   selectMode?: boolean
   selectedIds?: Set<string>
   highlightedId?: string | null
+  stemCounts?: Map<string, number>
   onToggleSelect?: (asset: Asset) => void
 }) {
   const columnCount = useColumnCount(Boolean(compact))
@@ -236,6 +245,7 @@ export function MediaGrid({
               selectMode={selectMode}
               selected={selectedIds?.has(asset.id) ?? false}
               highlighted={highlightedId === asset.id}
+              stemCount={stemCounts?.get(asset.id)}
               onToggleSelect={onToggleSelect}
             />
           ))}

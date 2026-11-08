@@ -433,7 +433,6 @@ export function PromptDock() {
           description: `${ids.length} ${ids.length === 1 ? 'asset' : 'assets'} added to your library.`,
           tone: 'success',
         })
-        setComposerOpen(false)
       }
     } catch {
       // runGeneration already reported the error.
@@ -1167,7 +1166,11 @@ function AttachmentChip({
         <img src={mediaUrl(src)} alt="" className="size-6 rounded-md object-cover" />
       ) : (
         <div className="grid size-6 place-items-center rounded-md bg-lime-soft text-lime">
-          <Mic2 className="size-3.5" />
+          {attachment.type === 'lora' ? (
+            <SlidersHorizontal className="size-3.5" />
+          ) : (
+            <Mic2 className="size-3.5" />
+          )}
         </div>
       )}
       <div className="max-w-[140px]">

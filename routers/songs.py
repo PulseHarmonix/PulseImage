@@ -31,7 +31,7 @@ async def songs_generate(request: Request):
             lyrics=data.get("lyrics", ""),
             title=data.get("title", ""),
             planning=data.get("planning", "full"),
-            max_duration=data.get("max_duration", 600),
+            max_duration=data.get("max_duration", 300),
             acoustic_steps=data.get("acoustic_steps", 32),
             max_score_tokens=data.get("max_score_tokens", 8192),
             seed=data.get("seed", 0),
@@ -43,6 +43,11 @@ async def songs_generate(request: Request):
             guidance=data.get("guidance", 1.0),
             tile_frames=data.get("tile_frames", 1024),
             download_missing=data.get("download_missing", True),
+            abc_temperature=data.get("abc_temperature", 0.7),
+            abc_top_p=data.get("abc_top_p", 0.9),
+            abc_top_k=data.get("abc_top_k", 30),
+            abc_repetition_penalty=data.get("abc_repetition_penalty", 1.005),
+            abc_penalty_window=data.get("abc_penalty_window", 100),
         )
         return result
     except Exception as e:
@@ -63,7 +68,7 @@ async def songs_cover(request: Request):
             style=data.get("style", ""),
             lyrics=data.get("lyrics", ""),
             title=data.get("title", ""),
-            max_duration=data.get("max_duration", 600),
+            max_duration=data.get("max_duration", 300),
             acoustic_steps=data.get("acoustic_steps", 32),
             max_score_tokens=data.get("max_score_tokens", 8192),
             seed=data.get("seed", 0),

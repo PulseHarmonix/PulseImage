@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { apiDelete, apiGet, apiPost, apiUrl, mediaUrl } from '../lib/api'
 import { assetDisplayName } from '../lib/assets'
+import { isStemAsset } from '../lib/stems'
 import { runSerializedGeneration } from '../lib/generationQueue'
 import { useHistory, useSettings } from '../lib/queries'
 import { PageHeader } from '../components/shell/PageHeader'
@@ -681,7 +682,9 @@ export function MusicVideoPage() {
     () => new Map(historyAssets.map((asset) => [asset.id, asset])),
     [historyAssets],
   )
-  const audioAssets = historyAssets.filter((asset) => assetType(asset) === 'audio')
+  const audioAssets = historyAssets.filter(
+    (asset) => assetType(asset) === 'audio' && !isStemAsset(asset),
+  )
   const imageAssets = historyAssets.filter((asset) => assetType(asset) === 'image')
   const previewImage = inspectorId
     ? imageAssets.find((asset) => asset.id === inspectorId)
@@ -1582,7 +1585,7 @@ export function MusicVideoPage() {
                     </option>
                     {audioAssets.map((asset) => (
                       <option key={asset.id} value={asset.id}>
-                        {titleFromPrompt(asset.prompt || asset.filename)}
+                        {assetDisplayName(asset)}
                       </option>
                     ))}
                   </Select>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowUpRight,
+  AudioLines,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -34,8 +35,10 @@ import {
 } from '../../lib/assets'
 import { runSerializedGeneration } from '../../lib/generationQueue'
 import { scoreViewFromAsset } from '../../lib/musicScore'
+import { isStemAsset, stemMeta } from '../../lib/stems'
 import { usePromptStore } from '../../stores/prompt'
 import { useMusicGeneratorStore } from '../../stores/musicGenerator'
+import { useStemsStore } from '../../stores/stems'
 import { useUiStore } from '../../stores/ui'
 import { useQueueStore } from '../../stores/queue'
 import { confirmAction } from '../../stores/confirm'
@@ -68,6 +71,7 @@ export function AssetInspector() {
   const inspectorId = useUiStore((s) => s.inspectorId)
   const openInspector = useUiStore((s) => s.openInspector)
   const toast = useUiStore((s) => s.toast)
+  const openStems = useStemsStore((s) => s.openStems)
   const updateActive = usePromptStore((s) => s.updateActive)
   const updateMusicGenerator = useMusicGeneratorStore((s) => s.update)
   const addQueue = useQueueStore((s) => s.add)
@@ -610,6 +614,15 @@ export function AssetInspector() {
                 Cover this song
               </Button>
             ) : null}
+            {type === 'audio' && !isStemAsset(asset) ? (
+              <Button
+                variant="soft"
+                icon={<AudioLines className="size-3.5" />}
+                onClick={() => openStems(asset.id)}
+              >
+                Stems
+              </Button>
+            ) : null}
             {scoreView ? (
               <Button
                 variant="soft"
@@ -741,35 +754,50 @@ export function AssetInspector() {
                 Related
               </p>
               <div className="grid grid-cols-3 gap-2">
-                {related.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => openInspector(item.id)}
-                    className="relative aspect-square overflow-hidden rounded-lg border border-line bg-black"
-                  >
-                    {assetType(item) === 'image' || assetType(item) === 'video' ? (
-                      <>
-                        <img
-                          src={mediaUrl(`/thumbnails/${item.id}.jpg`)}
-                          alt=""
-                          loading="lazy"
-                          className="size-full object-cover"
-                        />
-                        {assetType(item) === 'video' ? (
-                          <span className="absolute inset-0 grid place-items-center bg-black/10">
-                            <span className="grid size-7 place-items-center rounded-full bg-black/60 text-white">
-                              <Video className="size-3" />
+                {related.map((item) => {
+                  const itemType = assetType(item)
+                  const stemInfo = parseMetadata(item).stem
+                  const stemKey =
+                    typeof stemInfo === 'object' && stemInfo
+                      ? (stemInfo as Record<string, unknown>).stem
+                      : undefined
+                  const audioLabel = isStemAsset(item)
+                    ? stemMeta(typeof stemKey === 'string' ? stemKey : undefined).label
+                    : assetDisplayName(item)
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => openInspector(item.id)}
+                      className="relative aspect-square overflow-hidden rounded-lg border border-line bg-black"
+                      title={itemType === 'audio' ? audioLabel : undefined}
+                    >
+                      {itemType === 'image' || itemType === 'video' ? (
+                        <>
+                          <img
+                            src={mediaUrl(`/thumbnails/${item.id}.jpg`)}
+                            alt=""
+                            loading="lazy"
+                            className="size-full object-cover"
+                          />
+                          {itemType === 'video' ? (
+                            <span className="absolute inset-0 grid place-items-center bg-black/10">
+                              <span className="grid size-7 place-items-center rounded-full bg-black/60 text-white">
+                                <Video className="size-3" />
+                              </span>
                             </span>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="flex size-full flex-col items-center justify-center gap-1 bg-surface-2 px-1 text-text-3">
+                          <Volume2 className="size-4 shrink-0" />
+                          <span className="line-clamp-2 text-center text-[9px] leading-3 text-text-2">
+                            {audioLabel}
                           </span>
-                        ) : null}
-                      </>
-                    ) : (
-                      <div className="grid size-full place-items-center bg-surface-2 text-text-3">
-                        <Volume2 className="size-4" />
-                      </div>
-                    )}
-                  </button>
-                ))}
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
             </div>
           ) : null}
@@ -789,6 +817,7 @@ export function AssetInspector() {
         maxScoreTokens={scoreView.maxScoreTokens}
         coverSource={scoreView.coverSource}
         audioFilename={scoreView.audioFilename}
+        sampling={scoreView.sampling}
       />
     ) : null}
     {fullscreen ? (

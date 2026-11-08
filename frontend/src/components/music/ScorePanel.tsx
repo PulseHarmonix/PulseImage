@@ -5,6 +5,15 @@ import { Badge, IconButton } from '../ui'
 import { mediaUrl } from '../../lib/api'
 import { parseVocalTiming } from '../../lib/abcTiming'
 
+const samplingLabels: Record<string, string> = {
+  temperature: 'Temperature',
+  top_p: 'Top P',
+  top_k: 'Top K',
+  repetition_penalty: 'Repetition',
+  penalty_window: 'Penalty window',
+  guidance: 'Guidance',
+}
+
 function formatClock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
   const total = Math.floor(seconds)
@@ -25,6 +34,7 @@ export function ScorePanel({
   maxScoreTokens,
   coverSource,
   audioFilename,
+  sampling,
 }: {
   open: boolean
   onClose: () => void
@@ -37,6 +47,10 @@ export function ScorePanel({
   maxScoreTokens?: number
   coverSource?: string
   audioFilename?: string
+  sampling?: {
+    abc?: Record<string, number>
+    music?: Record<string, number>
+  }
 }) {
   const scoreRef = useRef<HTMLDivElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -325,6 +339,45 @@ export function ScorePanel({
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-3">
               Plan details
             </p>
+            {sampling && (sampling.abc || sampling.music) ? (
+              <div>
+                <p className="text-[9px] uppercase tracking-wider text-text-3">Sampling</p>
+                <div className="mt-1 space-y-1.5">
+                  {sampling.abc ? (
+                    <div>
+                      <p className="text-[9px] font-medium text-text-2">ABC</p>
+                      <div className="mt-0.5 flex flex-wrap gap-1.5">
+                        {Object.entries(sampling.abc).map(([key, value]) => (
+                          <span
+                            key={key}
+                            className="rounded-md border border-line px-1.5 py-1 text-[9px] text-text-3"
+                          >
+                            {samplingLabels[key] ?? key}{' '}
+                            <span className="font-mono text-text-2">{value}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {sampling.music ? (
+                    <div>
+                      <p className="text-[9px] font-medium text-text-2">Music</p>
+                      <div className="mt-0.5 flex flex-wrap gap-1.5">
+                        {Object.entries(sampling.music).map(([key, value]) => (
+                          <span
+                            key={key}
+                            className="rounded-md border border-line px-1.5 py-1 text-[9px] text-text-3"
+                          >
+                            {samplingLabels[key] ?? key}{' '}
+                            <span className="font-mono text-text-2">{value}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {style ? (
               <div>
                 <p className="text-[9px] uppercase tracking-wider text-text-3">Style</p>

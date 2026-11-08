@@ -24,6 +24,7 @@ Written by Pulse Harmonix
 - **Library** - searchable asset grid, filters, bulk actions, drag/drop import, fullscreen inspector, To Prompt, variations, video upscaling, image editing, music covers, and score/plan views.
 - **Music Video** - projects, character slots, timed sections, draggable segment timeline, section playback, auto-generation, and ZIP export.
 - **Music Generator** - YuE2 song generation and covers, unique song titles, recent songs, sheet music, vocal timing, and score/plan details.
+- **Stems** - lazy six-stem extraction for any audio asset with a synchronized mixer and waveforms.
 - **Single Frame** - scrub generated videos and save full-resolution frames to the Library.
 - **Voices** - TTS engine readiness, voice metadata, transcript/language editing, and speaker previews.
 - **Models and Settings** - model selection, required-model checks, LoRA listing, ComfyUI/Ollama URLs, prompt enhancers, RelayVSR defaults, and raw settings.
@@ -65,6 +66,7 @@ Exact required filenames are defined in the workflow JSON files under `workflows
 **ComfyUI music models**
 - YuE2 native nodes with `yue2_3b_int8_convrot.safetensors`
 - SheetSage2 nodes for audio-to-ABC cover transcription
+- `ComfyUI-Demucs-AudioSeparator` with the `htdemucs_6s` model for lazy six-stem extraction
 
 **Speech**
 - Qwen3-TTS
@@ -225,3 +227,4 @@ PulseImage/
 - **Missing models** - open Models to compare installed files with the workflow requirements.
 - **No frame/audio durations** - install FFmpeg and ffprobe and restart the backend.
 - **Music covers unavailable** - install the SheetSage2 nodes and confirm the YuE2 checkpoint is present.
+- **Stems unavailable** - install `ComfyUI-Demucs-AudioSeparator` in ComfyUI and restart it. The `htdemucs_6s` model downloads on the first separation.
