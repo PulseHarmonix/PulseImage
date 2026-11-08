@@ -10,6 +10,7 @@ from services.generation_service import get_asset_by_id, save_generation
 from services.video_frame_service import (
     probe_video,
     extract_frame_window,
+    extract_preview_frame,
     extract_full_frame,
     VideoFrameError,
     FRAME_WINDOW,
@@ -81,6 +82,31 @@ async def frames_window(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     return {"success": True, "frames": frames, "fps": float(fps)}
+
+
+@router.post("/frames/preview")
+async def frames_preview(request: Request):
+    """Return a cached full-resolution preview image for a single frame."""
+    data = await request.json()
+    asset_id = (data or {}).get("asset_id")
+    frame_index = (data or {}).get("frame_index")
+    if not asset_id or frame_index is None:
+        return JSONResponse({"success": False, "error": "asset_id and frame_index required"}, status_code=400)
+
+    asset, err = _get_video_asset(asset_id)
+    if err:
+        return JSONResponse({"success": False, "error": err}, status_code=404)
+
+    try:
+        info = probe_video(asset["filename"])
+        fps = info.get("fps") or 24.0
+        result = extract_preview_frame(asset["filename"], asset_id, int(frame_index), float(fps))
+    except VideoFrameError as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    return {"success": True, **result}
 
 
 @router.post("/frames/save")

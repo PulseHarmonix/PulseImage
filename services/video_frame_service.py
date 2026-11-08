@@ -190,6 +190,66 @@ def extract_frame_window(
     return frames
 
 
+def extract_preview_frame(
+    video_filename: str,
+    asset_id: str,
+    frame_index: int,
+    fps: float,
+) -> dict:
+    """Extract a full-resolution JPEG preview for a single frame.
+
+    Cached under ``thumbnails/frames/<asset_id>/full/`` so repeated selections
+    are instant and do not create library assets.
+    """
+    src = _video_path(video_filename)
+    if not os.path.isfile(src):
+        raise VideoFrameError(f"Video not found: {video_filename}")
+
+    ffmpeg = _find_binary("ffmpeg")
+    if not ffmpeg:
+        raise VideoFrameError("ffmpeg not found on PATH")
+
+    fps = fps if fps and fps > 0 else DEFAULT_FPS
+    index = max(0, int(frame_index))
+    time_seconds = index / fps
+
+    out_dir = os.path.join(frame_cache_dir(asset_id), "full")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"f_{index}.jpg")
+
+    if not os.path.isfile(out_path):
+        tmp_path = os.path.join(out_dir, f"_tmp_{uuid.uuid4().hex}.jpg")
+        cmd = [
+            ffmpeg, "-y",
+            "-ss", f"{time_seconds:.3f}",
+            "-i", src,
+            "-frames:v", "1",
+            "-q:v", "2",
+            tmp_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            raise VideoFrameError(f"ffmpeg preview extraction failed: {e}")
+
+        if result.returncode != 0 or not os.path.isfile(tmp_path):
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            raise VideoFrameError(
+                f"ffmpeg preview extraction failed: {(result.stderr or '')[-300:]}"
+            )
+        os.replace(tmp_path, out_path)
+
+    return {
+        "url": f"/thumbnails/frames/{asset_id}/full/f_{index}.jpg",
+        "frame_index": index,
+        "time": time_seconds,
+    }
+
+
 def extract_full_frame(video_filename: str, time_seconds: float) -> dict:
     """Extract a single full-resolution PNG frame into the images folder."""
     src = _video_path(video_filename)

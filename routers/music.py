@@ -373,6 +373,19 @@ async def generate_music_segment(segment_id: str, request: Request):
         derived_from=[parent_id] if parent_id else [],
         metadata={
             "name": export_name,
+            "gen": {
+                "mode": "video",
+                "video_model": video_model,
+                "ltx_version": ltx_version if video_model == "ltx" else None,
+                "fasth3_mode": "reference" if video_model == "fasth3" else None,
+                "resolution": resolution,
+                "aspect_ratio": aspect_ratio,
+                "duration": out_duration,
+                "original_prompt": prompt,
+                "video_upscale": "relayvsr_x2"
+                if (result.get("upscale") or {}).get("status") == "done"
+                else "off",
+            },
             "music": {
                 "project_id": project.get("id"),
                 "slot_id": slot.get("id"),

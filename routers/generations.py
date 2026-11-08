@@ -32,6 +32,21 @@ from services.video_upscale_service import (
 
 router = APIRouter()
 
+
+def video_reference_error(resolved_model, source_image, ref_audios, fasth3_mode):
+    if not ref_audios:
+        return None
+    if resolved_model == "fasth3":
+        if fasth3_mode == "i2v":
+            return "FastH3 First-frame mode does not support audio references."
+        return None
+    if not source_image and resolved_model in ("ltx", "grok"):
+        return "Audio-only video requires FastH3 and an appropriate model."
+    if resolved_model == "grok":
+        return "Grok video does not support audio references."
+    return None
+
+
 @router.post("/generate")
 async def generate(data: dict):
     """Generate images or videos based on the provided prompt and parameters."""
@@ -50,6 +65,8 @@ async def generate(data: dict):
     ltx_version = data.get("ltx_version")  # "2.3" | "2.5"; None → settings
     ref_images = (data.get("ref_images") or [])[:6]
     ref_audios = (data.get("ref_audios") or [])[:3]
+    if modifier_audio and modifier_audio not in ref_audios:
+        ref_audios = (ref_audios + [modifier_audio])[:3]
     qwen_turbo = data.get("qwen_turbo", True)
     lora_name = data.get("lora_name")
     job_id = data.get("job_id") or ""
@@ -59,9 +76,15 @@ async def generate(data: dict):
     upscale_detail = data.get("upscale_detail")
 
     if mode == "video" and duration:
-        if resolve_video_model(video_model) == "fasth3":
+        resolved_model = resolve_video_model(video_model)
+        reference_error = video_reference_error(
+            resolved_model, source_image, ref_audios, fasth3_mode
+        )
+        if reference_error:
+            return {"success": False, "error": reference_error}
+        if resolved_model == "fasth3":
             # Image-only: optionally use the first-frame I2V workflow.
-            if fasth3_mode == "i2v" and source_image and not modifier_audio:
+            if fasth3_mode == "i2v" and source_image and not modifier_audio and not ref_audios:
                 set_progress_job(job_id, 0)
                 result = await generate_single_image_to_video(
                     source_image, prompt, resolution, aspect_ratio, duration,
@@ -72,7 +95,10 @@ async def generate(data: dict):
                 )
                 return {"success": True, "results": [result]}
             # Reference workflows: 1 image (no audio), 2+ images, or multiple audios.
-            if (ref_images or len(ref_audios) > 1) and not (len(ref_images) == 1 and len(ref_audios) == 1):
+            if (
+                (ref_images or len(ref_audios) > 1 or (not source_image and ref_audios))
+                and not (len(ref_images) == 1 and len(ref_audios) == 1)
+            ):
                 set_progress_job(job_id, 0)
                 result = await generate_fasth3_multi_ref_video(
                     ref_images, ref_audios, prompt, resolution, aspect_ratio, duration
@@ -151,6 +177,8 @@ async def generate_stream(data: dict):
     ltx_version = data.get("ltx_version")  # "2.3" | "2.5"
     ref_images = (data.get("ref_images") or [])[:6]
     ref_audios = (data.get("ref_audios") or [])[:3]
+    if modifier_audio and modifier_audio not in ref_audios:
+        ref_audios = (ref_audios + [modifier_audio])[:3]
     qwen_turbo = data.get("qwen_turbo", True)
     lora_name = data.get("lora_name")
     lora_strength = float(data.get("lora_strength", 0.6)) if data.get("lora_strength") is not None else 0.6
@@ -168,8 +196,14 @@ async def generate_stream(data: dict):
         count = 1 if is_video else 4
 
     if is_video:
-        if resolve_video_model(video_model) == "fasth3":
-            if fasth3_mode == "i2v" and source_image and not modifier_audio:
+        resolved_model = resolve_video_model(video_model)
+        reference_error = video_reference_error(
+            resolved_model, source_image, ref_audios, fasth3_mode
+        )
+        if reference_error:
+            return JSONResponse({"success": False, "error": reference_error}, status_code=400)
+        if resolved_model == "fasth3":
+            if fasth3_mode == "i2v" and source_image and not modifier_audio and not ref_audios:
                 return StreamingResponse(
                     generate_image_to_videos_with_progress(
                         source_image, prompt, resolution, aspect_ratio, duration,
@@ -178,7 +212,10 @@ async def generate_stream(data: dict):
                     ),
                     media_type="text/event-stream"
                 )
-            if (ref_images or len(ref_audios) > 1) and not (len(ref_images) == 1 and len(ref_audios) == 1):
+            if (
+                (ref_images or len(ref_audios) > 1 or (not source_image and ref_audios))
+                and not (len(ref_images) == 1 and len(ref_audios) == 1)
+            ):
                 return StreamingResponse(
                     generate_fasth3_multi_ref_videos_with_progress(
                         ref_images, ref_audios, prompt, resolution, aspect_ratio, duration, count=count, job_id=job_id,

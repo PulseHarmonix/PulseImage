@@ -1,19 +1,16 @@
-# Core web framework
-fastapi
-uvicorn[standard]
+# Core web framework and validation
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2
+python-multipart>=0.0.9
 
-# Templating and file uploads
-jinja2
-python-multipart
+# ComfyUI and Ollama HTTP/WebSocket communication
+httpx>=0.27
+websockets>=13
 
-# Async HTTP client (ComfyUI + Ollama communication)
-httpx
+# Thumbnails, image dimensions, and frame previews
+Pillow>=10
+opencv-python-headless>=4.10
 
-# Live ComfyUI progress over WebSocket
-websockets
-
-# Image handling
-Pillow
-
-# Video trimming fallback (when ffmpeg not available)
-opencv-python-headless
+# FFmpeg and ffprobe are required system tools, not Python packages.
+# Install them separately and ensure both are available on PATH.

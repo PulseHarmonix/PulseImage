@@ -14,9 +14,19 @@ async def upload_asset(file: UploadFile = File(...)):
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "bin"
     content_type = (file.content_type or "").lower()
 
-    is_audio = content_type.startswith("audio/") or ext in ["mp3", "wav", "ogg", "m4a", "flac", "aac", "webm"]
+    audio_exts = ["mp3", "wav", "ogg", "m4a", "flac", "aac"]
+    video_exts = ["mp4", "webm", "mov", "mkv", "avi", "m4v", "mpeg", "mpg"]
 
-    if is_audio:
+    if content_type.startswith("video/"):
+        folder = "videos"
+        ftype = "video"
+    elif content_type.startswith("audio/"):
+        folder = "audio"
+        ftype = "audio"
+    elif ext in video_exts:
+        folder = "videos"
+        ftype = "video"
+    elif ext in audio_exts:
         folder = "audio"
         ftype = "audio"
     else:
