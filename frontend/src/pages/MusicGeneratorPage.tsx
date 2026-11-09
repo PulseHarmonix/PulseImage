@@ -27,6 +27,7 @@ import { confirmAction } from '../stores/confirm'
 import { useUiStore } from '../stores/ui'
 import { useMusicGeneratorStore } from '../stores/musicGenerator'
 import { useStemsStore } from '../stores/stems'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import { ScorePanel } from '../components/music/ScorePanel'
 import { Badge, Button, EmptyState, Input, Select, Spinner, Textarea } from '../components/ui'
@@ -428,7 +429,7 @@ export function MusicGeneratorPage() {
     Boolean(style.trim() || lyrics.trim())
 
   return (
-    <div className="mx-auto w-full max-w-[1500px] px-4 pb-12 pt-16 md:px-8 md:pt-8">
+    <PageContainer className="pb-12">
       <PageHeader
         eyebrow="Music"
         title="Make a song from a style and lyrics."
@@ -1015,7 +1016,7 @@ export function MusicGeneratorPage() {
         audioFilename={scoreView?.audioFilename ?? lastResult?.filename}
         sampling={scoreView?.sampling}
       />
-    </div>
+    </PageContainer>
   )
 }
 

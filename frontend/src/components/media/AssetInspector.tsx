@@ -744,6 +744,9 @@ export function AssetInspector() {
                 <Meta label="Duration" value={gen.duration ? `${gen.duration}s` : '—'} />
                 <Meta label="Upscale" value={gen.video_upscale || 'off'} />
                 <Meta label="Enhancer" value={gen.enhancer_id || 'none'} />
+                {gen.motion ? (
+                  <Meta label="Motion" value={gen.motion.preset_name || gen.motion.preset_id} />
+                ) : null}
               </div>
             </div>
           ) : null}

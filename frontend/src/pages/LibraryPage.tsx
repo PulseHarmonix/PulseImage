@@ -25,6 +25,7 @@ import {
   apiUpload,
 } from '../lib/api'
 import { MediaGrid } from '../components/media/MediaGrid'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import { Badge, Button, Dialog, DialogContent, EmptyState, Input } from '../components/ui'
 import { useUiStore } from '../stores/ui'
@@ -303,12 +304,12 @@ export function LibraryPage() {
 
   return (
     <div
-      className="mx-auto w-full max-w-[1700px] px-4 pb-10 pt-16 md:px-8 md:pt-8"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      <PageContainer>
       <Dialog
         open={Boolean(pendingImports)}
         onOpenChange={(open) => {
@@ -551,6 +552,7 @@ export function LibraryPage() {
           />
         )}
       </div>
+      </PageContainer>
     </div>
   )
 }

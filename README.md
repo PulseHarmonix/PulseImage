@@ -22,10 +22,11 @@ Written by Pulse Harmonix
 
 - **Studio** - prompt composer for image, video, and speech, with attachments, prompt tabs, model controls, and a global queue.
 - **Library** - searchable asset grid, filters, bulk actions, drag/drop import, fullscreen inspector, To Prompt, variations, video upscaling, image editing, music covers, and score/plan views.
-- **Music Video** - projects, character slots, timed sections, draggable segment timeline, section playback, auto-generation, and ZIP export.
+- **Music Video** - projects, character slots, timed sections, draggable segment timeline, section playback, auto-generation, ZIP export, and Lightworks 2026 FCP7 XML package export.
 - **Music Generator** - YuE2 song generation and covers, unique song titles, recent songs, sheet music, vocal timing, and score/plan details.
-- **Stems** - lazy six-stem extraction for any audio asset with a synchronized mixer and waveforms.
+- **Stems** - lazy six-stem extraction for any audio asset with a synchronized mixer, waveforms, and export of the current audible stem selection as a new audio asset.
 - **Single Frame** - scrub generated videos and save full-resolution frames to the Library.
+- **Motion** - prompt-based camera/motion presets and image-to-video with LTX/FastH3, using previews from `motion-presets/`.
 - **Voices** - TTS engine readiness, voice metadata, transcript/language editing, and speaker previews.
 - **Models and Settings** - model selection, required-model checks, LoRA listing, ComfyUI/Ollama URLs, prompt enhancers, RelayVSR defaults, and raw settings.
 - **Admin** - raw settings editing, library flag editing/deletion, and thumbnail backfill.
@@ -183,6 +184,7 @@ python -m compileall -q main.py config.py routers services utils
 - Legacy `/app` URLs redirect to their root equivalents.
 - SQLite is the primary data store in `pulseimage.db`.
 - Generated media is stored in `images/`, `videos/`, `audio/`, and `thumbnails/`.
+- `/motion-presets` serves drop-in preset preview videos and is not part of the Library.
 
 ---
 

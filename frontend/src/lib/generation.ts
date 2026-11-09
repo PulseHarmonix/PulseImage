@@ -18,6 +18,12 @@ export interface GenerationHooks {
   onAsset: (assetId: string) => void
 }
 
+export interface RunGenerationOptions {
+  label?: string
+  parentId?: string
+  extraMetadata?: Partial<GenMetadata>
+}
+
 function upscaleEnabled(tab: PromptTab, settings?: AppSettings): boolean {
   return tab.upscale ?? settings?.video_upscale === 'relayvsr_x2'
 }
@@ -26,6 +32,7 @@ function metadataFor(
   tab: PromptTab,
   result?: GeneratedResult,
   upscale?: boolean,
+  extraMetadata?: Partial<GenMetadata>,
 ): GenMetadata {
   const images = tab.attachments
     .filter((a) => a.type === 'image' || a.type === 'video')
@@ -34,7 +41,7 @@ function metadataFor(
     .filter((a) => a.type === 'audio' || a.type === 'voice')
     .map((a) => ({ id: a.id || '', name: a.name, type: 'audio' as const }))
 
-  return {
+  const metadata: GenMetadata = {
     mode: tab.mode,
     resolution: tab.resolution,
     aspect_ratio: tab.aspect,
@@ -61,6 +68,8 @@ function metadataFor(
       lora: tab.attachments.find((a) => a.type === 'lora') || null,
     },
   }
+
+  return extraMetadata ? { ...metadata, ...extraMetadata } : metadata
 }
 
 export async function saveGeneratedAsset(
@@ -68,6 +77,8 @@ export async function saveGeneratedAsset(
   result: GeneratedResult,
   type: 'image' | 'video',
   upscale?: boolean,
+  parentId?: string,
+  extraMetadata?: Partial<GenMetadata>,
 ): Promise<string | undefined> {
   const filename = result.local_filename || result.filename
   if (!filename) return undefined
@@ -81,7 +92,8 @@ export async function saveGeneratedAsset(
       width: result.width || 0,
       height: result.height || 0,
       duration: type === 'video' ? result.duration || tab.duration : undefined,
-      metadata: { gen: metadataFor(tab, result, upscale) },
+      parent_id: parentId,
+      metadata: { gen: metadataFor(tab, result, upscale, extraMetadata) },
     },
   )
   if (!response.success) throw new Error(response.error || 'Could not save generation')
@@ -112,11 +124,12 @@ export async function runGeneration(
   tab: PromptTab,
   settings: AppSettings | undefined,
   hooks: GenerationHooks,
+  options?: RunGenerationOptions,
 ): Promise<string[]> {
   const jobId = uid('job')
   const queueJob: QueueJob = {
     id: jobId,
-    label: tab.prompt.trim().slice(0, 80) || 'Untitled generation',
+    label: options?.label || tab.prompt.trim().slice(0, 80) || 'Untitled generation',
     mode: tab.mode,
     status: 'running',
     progress: 0,
@@ -200,7 +213,14 @@ export async function runGeneration(
       const ids: string[] = []
       for (const result of results) {
         if (!result.success) throw new Error(result.error || 'Image generation failed')
-        const id = await saveGeneratedAsset(tab, result, 'image')
+        const id = await saveGeneratedAsset(
+          tab,
+          result,
+          'image',
+          undefined,
+          options?.parentId,
+          options?.extraMetadata,
+        )
         if (id) ids.push(id)
       }
       hooks.onProgress(jobId, { stage: 'generating', workflow_percent: 100, state: 'finished' })
@@ -234,7 +254,14 @@ export async function runGeneration(
     const ids: string[] = []
     for (const result of results) {
       if (!result.success) throw new Error(result.error || 'Video generation failed')
-      const id = await saveGeneratedAsset(tab, result, 'video', upscale)
+      const id = await saveGeneratedAsset(
+        tab,
+        result,
+        'video',
+        upscale,
+        options?.parentId,
+        options?.extraMetadata,
+      )
       if (id) ids.push(id)
     }
     ids.forEach(hooks.onAsset)

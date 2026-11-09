@@ -4,6 +4,7 @@ import { Check, Database, Image as ImageIcon, RefreshCcw, Server, Settings2, Shi
 import { useSettings, useUpdateSettings } from '../lib/queries'
 import { apiPost } from '../lib/api'
 import { PageHeader } from '../components/shell/PageHeader'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PromptEnhancerEditor } from '../components/admin/PromptEnhancerEditor'
 import { RawSettingsEditor } from '../components/admin/RawSettingsEditor'
 import { LibraryEditor } from '../components/admin/LibraryEditor'
@@ -45,7 +46,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1000px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Settings"
         title="Workspace controls."
@@ -128,7 +129,7 @@ export function SettingsPage() {
           </div>
         </Section>
       </div>
-    </div>
+    </PageContainer>
   )
 }
 
@@ -201,7 +202,7 @@ export function AdminPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Admin"
         title="Library maintenance."
@@ -252,6 +253,6 @@ export function AdminPage() {
         <RawSettingsEditor />
         <LibraryEditor />
       </div>
-    </div>
+    </PageContainer>
   )
 }

@@ -23,6 +23,7 @@ import {
 } from '../lib/queries'
 import { apiGet } from '../lib/api'
 import { PageHeader } from '../components/shell/PageHeader'
+import { PageContainer } from '../components/shell/PageContainer'
 import { Badge, Button, Select } from '../components/ui'
 import { useUiStore } from '../stores/ui'
 import { cn } from '../lib/utils'
@@ -188,7 +189,7 @@ export function ModelsPage() {
   }, [models])
 
   return (
-    <div className="mx-auto w-full max-w-[1300px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Models"
         title="Tune the engine room."
@@ -200,7 +201,14 @@ export function ModelsPage() {
                 <Check className="size-2.5" /> Saved
               </Badge>
             ) : null}
-            <Button variant="outline" onClick={() => void refreshModels()} busy={refreshing}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void refreshModels()
+                void stems.refetch()
+              }}
+              busy={refreshing || stems.isFetching}
+            >
               <RefreshCcw className="size-3.5" /> Refresh scan
             </Button>
           </div>
@@ -375,16 +383,6 @@ export function ModelsPage() {
             The model downloads on first separation. Install ComfyUI-Demucs-AudioSeparator in ComfyUI,
             then restart ComfyUI.
           </p>
-          <div className="mt-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void stems.refetch()}
-              busy={stems.isFetching}
-            >
-              <RefreshCcw className="size-3.5" /> Refresh
-            </Button>
-          </div>
         </Panel>
       </div>
 
@@ -504,7 +502,7 @@ export function ModelsPage() {
           </Link>
         </Panel>
       </div>
-    </div>
+    </PageContainer>
   )
 }
 

@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ChevronDown,
   Clapperboard,
   Clock3,
   Download,
@@ -29,10 +30,15 @@ import { assetDisplayName } from '../lib/assets'
 import { isStemAsset } from '../lib/stems'
 import { runSerializedGeneration } from '../lib/generationQueue'
 import { useHistory, useSettings } from '../lib/queries'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import {
   Badge,
   Button,
+  Dropdown,
+  DropdownContent,
+  DropdownItem,
+  DropdownTrigger,
   EmptyState,
   IconButton,
   Input,
@@ -53,6 +59,7 @@ interface Segment {
   start_time: number
   end_time: number
   prompt: string
+  follow_on?: boolean
   status?: string
   video_filename?: string
   video_asset_id?: string
@@ -359,6 +366,7 @@ function SegmentRow({
   progress,
   batchActive,
   selected,
+  isFirst,
   videoName,
   playingAudio,
   audioAvailable,
@@ -374,13 +382,18 @@ function SegmentRow({
   progress: number
   batchActive: boolean
   selected: boolean
+  isFirst: boolean
   videoName?: string
   playingAudio: boolean
   audioAvailable: boolean
   onSelect: () => void
   onToggleAudio: () => void
-  onDraft: (updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt'>>) => void
-  onSave: (updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt'>>) => void
+  onDraft: (
+    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+  ) => void
+  onSave: (
+    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+  ) => void
   onGenerate: () => void
   onDelete: () => void
 }) {
@@ -510,6 +523,32 @@ function SegmentRow({
             placeholder="Describe this shot…"
             className="min-h-[56px] px-2.5 py-2 text-xs leading-5"
           />
+
+          <label
+            onClick={(event) => event.stopPropagation()}
+            className={cn(
+              'flex items-center gap-2 text-[11px] text-text-2',
+              isFirst && 'cursor-not-allowed opacity-60',
+            )}
+            title={
+              isFirst
+                ? 'The first segment cannot follow on from another segment'
+                : "Use the previous segment's frame at this segment's start time"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(segment.follow_on)}
+              disabled={isFirst}
+              onChange={(event) => {
+                const checked = event.target.checked
+                onDraft({ follow_on: checked })
+                onSave({ follow_on: checked })
+              }}
+              className="size-3.5 accent-lime"
+            />
+            Follow on
+          </label>
 
           {generating ? <Progress value={progress} /> : null}
           {segment.error ? <p className="text-[10px] text-danger">{segment.error}</p> : null}
@@ -933,7 +972,7 @@ export function MusicVideoPage() {
 
   const previewSegment = (
     segment: Segment,
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt'>>,
+    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
   ) => {
     if (!project) return
     queryClient.setQueryData<Project>(['music', 'project', project.id], (current) => {
@@ -956,7 +995,7 @@ export function MusicVideoPage() {
 
   const updateSegment = async (
     segment: Segment,
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt'>>,
+    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
   ) => {
     try {
       await apiPost(`/music/segments/${segment.id}`, updates)
@@ -1072,7 +1111,7 @@ export function MusicVideoPage() {
       }
       return false
     }
-    if (!slot?.image?.filename) {
+    if (!segment.follow_on && !slot?.image?.filename) {
       if (!options?.silent) {
         toast({ title: 'Set an image for this character first', tone: 'warning' })
       }
@@ -1082,7 +1121,7 @@ export function MusicVideoPage() {
     const trackQueue = options?.trackQueue !== false
     const jobId = `seg_${segment.id}_${Date.now().toString(36)}`
     const queueId = `music_${segment.id}_${Date.now().toString(36)}`
-    const label = `${slot.name || 'Character'} ${Number(segment.start_time).toFixed(1)}–${Number(
+    const label = `${slot?.name || 'Character'} ${Number(segment.start_time).toFixed(1)}–${Number(
       segment.end_time,
     ).toFixed(1)}s`
 
@@ -1413,8 +1452,18 @@ export function MusicVideoPage() {
     })
   }
 
+  const downloadZip = () => {
+    if (!project) return
+    window.location.href = apiUrl(`/music/projects/${project.id}/segments/zip`)
+  }
+
+  const downloadLwks = () => {
+    if (!project || !project.audio?.filename || !readySegments) return
+    window.location.href = apiUrl(`/music/projects/${project.id}/lwks`)
+  }
+
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Music video"
         title="Build visuals around the track."
@@ -1605,21 +1654,67 @@ export function MusicVideoPage() {
                   >
                     {playingSong ? 'Pause song' : 'Play song'}
                   </Button>
-                  {project.audio?.filename ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void removeAudio()}
-                      icon={<X className="size-3.5" />}
-                    >
-                      Clear audio
-                    </Button>
-                  ) : null}
-                  <a href={apiUrl(`/music/projects/${project.id}/segments/zip`)}>
-                    <Button variant="outline" size="sm" icon={<Download className="size-3.5" />}>
-                      Export ZIP
-                    </Button>
-                  </a>
+                  <div className="inline-flex items-center gap-2">
+                    {project.audio?.filename ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void removeAudio()}
+                        icon={<X className="size-3.5" />}
+                      >
+                        Clear audio
+                      </Button>
+                    ) : null}
+                    <div className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-r-none"
+                        onClick={downloadZip}
+                        icon={<Download className="size-3.5" />}
+                      >
+                        Export ZIP
+                      </Button>
+                      <Dropdown>
+                        <DropdownTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-l-none border-l-0 px-2"
+                            aria-label="More export options"
+                          >
+                            <ChevronDown className="size-3.5" />
+                          </Button>
+                        </DropdownTrigger>
+                        <DropdownContent>
+                          <DropdownItem onSelect={downloadZip}>
+                            <span className="flex items-center gap-2">
+                              <Download className="size-3.5" />
+                              Export ZIP
+                            </span>
+                          </DropdownItem>
+                          <DropdownItem
+                            onSelect={downloadLwks}
+                            disabled={!project.audio?.filename || !readySegments}
+                          >
+                            <span
+                              className="flex items-center gap-2"
+                              title={
+                                project.audio?.filename && readySegments
+                                  ? 'Lightworks 2026 - FCP7 XML + media package'
+                                  : !project.audio?.filename
+                                    ? 'Set an audio track first'
+                                    : 'Generate at least one segment first'
+                              }
+                            >
+                              <Film className="size-3.5" />
+                              Export LWKS
+                            </span>
+                          </DropdownItem>
+                        </DropdownContent>
+                      </Dropdown>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
@@ -2028,7 +2123,7 @@ export function MusicVideoPage() {
                   </div>
 
                   <div className="space-y-2">
-                    {(selectedSlot?.segments ?? []).map((segment) => (
+                    {(selectedSlot?.segments ?? []).map((segment, index) => (
                       <SegmentRow
                         key={segment.id}
                         segment={segment}
@@ -2036,6 +2131,7 @@ export function MusicVideoPage() {
                         progress={segmentProgress[segment.id] ?? 0}
                         batchActive={batchActive}
                         selected={selectedSegmentId === segment.id}
+                        isFirst={index === 0}
                         videoName={videoNameForSegment(segment)}
                         playingAudio={playingSegmentId === segment.id}
                         audioAvailable={Boolean(project?.audio?.filename)}
@@ -2079,6 +2175,6 @@ export function MusicVideoPage() {
           )}
         </section>
       </div>
-    </div>
+    </PageContainer>
   )
 }

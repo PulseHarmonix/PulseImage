@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, AudioLines, ExternalLink, Loader2, RefreshCw, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  AudioLines,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  X,
+} from 'lucide-react'
 import { apiGet, apiPost } from '../../lib/api'
 import { watchProgress } from '../../lib/assets'
 import { queryKeys, useHistory, useStemCapabilities } from '../../lib/queries'
-import { stemSourceTitle, type StemResponse, type StemSource } from '../../lib/stems'
+import {
+  stemSourceTitle,
+  type StemMixResponse,
+  type StemMixSelection,
+  type StemResponse,
+  type StemSource,
+} from '../../lib/stems'
 import { uid } from '../../lib/utils'
 import { useQueueStore } from '../../stores/queue'
 import { useStemsStore } from '../../stores/stems'
@@ -21,6 +35,7 @@ export function StemPanel() {
   const capabilities = useStemCapabilities()
   const queryClient = useQueryClient()
   const toast = useUiStore((state) => state.toast)
+  const openInspector = useUiStore((state) => state.openInspector)
   const addQueue = useQueueStore((state) => state.add)
   const updateQueue = useQueueStore((state) => state.update)
 
@@ -31,6 +46,16 @@ export function StemPanel() {
   const [stage, setStage] = useState<string | null>(null)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [mixSelection, setMixSelection] = useState<StemMixSelection>({
+    stemIds: [],
+    volumes: {},
+  })
+  const [savingMix, setSavingMix] = useState(false)
+  const [savedMix, setSavedMix] = useState<{
+    assetId: string
+    id: string
+    filename: string
+  } | null>(null)
 
   const activeAssetRef = useRef<string | null>(null)
   const loadedAssetRef = useRef<string | null>(null)
@@ -171,6 +196,31 @@ export function StemPanel() {
     [addQueue, queryClient, toast, updateQueue],
   )
 
+  const saveMix = useCallback(async () => {
+    if (!assetId || savingMix || running || !mixSelection.stemIds.length) return
+    setSavingMix(true)
+    try {
+      const result = await apiPost<StemMixResponse>(
+        `/stems/${encodeURIComponent(assetId)}/mix`,
+        { stem_ids: mixSelection.stemIds, volumes: mixSelection.volumes },
+      )
+      if (!result.success) throw new Error(result.error || 'Could not save stem mix')
+      await queryClient.invalidateQueries({ queryKey: queryKeys.history })
+      await queryClient.refetchQueries({ queryKey: queryKeys.history, type: 'active' })
+      const filename = result.filename || 'Stem mix'
+      if (result.asset_id) setSavedMix({ assetId, id: result.asset_id, filename })
+      toast({ title: 'Stem mix saved', description: filename, tone: 'success' })
+    } catch (error) {
+      toast({
+        title: 'Stem mix failed',
+        description: error instanceof Error ? error.message : 'Could not save stem mix',
+        tone: 'error',
+      })
+    } finally {
+      setSavingMix(false)
+    }
+  }, [assetId, savingMix, running, mixSelection, queryClient, toast])
+
   const title = stemSourceTitle(data?.source, asset)
   const stems = data?.stems ?? []
   const capability = capabilities.data
@@ -291,7 +341,50 @@ export function StemPanel() {
 
           {showMixer && source ? (
             <div className="space-y-3">
-              <StemMixer key={source.id || source.filename} source={source} stems={stems} />
+              <StemMixer
+                key={source.id || source.filename}
+                source={source}
+                stems={stems}
+                onMixChange={setMixSelection}
+              />
+              <div className="rounded-xl border border-line bg-white/[0.02] p-3">
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium">Save current mix</p>
+                    <p className="mt-0.5 text-[10px] text-text-3">
+                      {mixSelection.stemIds.length} stems selected · Original mix excluded
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    icon={<Download className="size-3.5" />}
+                    busy={savingMix}
+                    onClick={() => void saveMix()}
+                    disabled={!mixSelection.stemIds.length || savingMix || running}
+                  >
+                    Save mix
+                  </Button>
+                </div>
+                {savedMix && savedMix.assetId === assetId ? (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg border border-line/60 bg-white/[0.02] px-2.5 py-1.5">
+                    <span className="min-w-0 flex-1 truncate text-[10px] text-text-2">
+                      {savedMix.filename}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<ExternalLink className="size-3" />}
+                      onClick={() => {
+                        closeStems()
+                        openInspector(savedMix.id)
+                      }}
+                    >
+                      Open in Library
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
               <p className="text-[10px] text-text-3">
                 The original mix plays by default. Stems start muted; use mute, solo, and volume
                 to build the balance.

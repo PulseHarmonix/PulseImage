@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useHistory } from '../lib/queries'
 import { MediaGrid } from '../components/media/MediaGrid'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import { Badge, Button, EmptyState } from '../components/ui'
 import { usePromptStore } from '../stores/prompt'
@@ -32,7 +33,7 @@ export function StudioPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1700px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Local generative studio"
         title="Make something impossible."
@@ -115,7 +116,7 @@ export function StudioPage() {
           ) : null}
         </>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

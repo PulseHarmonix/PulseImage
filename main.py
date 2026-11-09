@@ -30,6 +30,7 @@ os.makedirs("audio", exist_ok=True)
 os.makedirs("images", exist_ok=True)
 os.makedirs("videos", exist_ok=True)
 os.makedirs("thumbnails", exist_ok=True)
+os.makedirs("motion-presets", exist_ok=True)
 
 app = FastAPI(title="Pulse Image", lifespan=lifespan)
 
@@ -64,6 +65,7 @@ app.mount("/images", StaticFiles(directory="images"), name="images")
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 app.mount("/audio", StaticFiles(directory="audio"), name="audio")
 app.mount("/thumbnails", StaticFiles(directory="thumbnails"), name="thumbnails")
+app.mount("/motion-presets", StaticFiles(directory="motion-presets"), name="motion-presets")
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")

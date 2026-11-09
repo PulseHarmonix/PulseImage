@@ -5,6 +5,7 @@ import { AudioLines, Mic2, Pencil, Play, Save, Search, Volume2 } from 'lucide-re
 import { useHistory, useSettings, useTtsEngines, queryKeys } from '../lib/queries'
 import { apiPost, mediaUrl } from '../lib/api'
 import { PageHeader } from '../components/shell/PageHeader'
+import { PageContainer } from '../components/shell/PageContainer'
 import { Badge, Button, Dialog, DialogContent, EmptyState, Input, Select, Textarea } from '../components/ui'
 import { usePromptStore } from '../stores/prompt'
 import { useUiStore } from '../stores/ui'
@@ -133,7 +134,7 @@ export function VoicesPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Voices"
         title="A cast for every scene."
@@ -338,7 +339,7 @@ export function VoicesPage() {
           </DialogContent>
         ) : null}
       </Dialog>
-    </div>
+    </PageContainer>
   )
 }
 

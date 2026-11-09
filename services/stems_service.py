@@ -29,6 +29,16 @@ SEPARATION_TIMEOUT_SECONDS = 3600
 WAVEFORM_POINTS = 300
 WAVEFORM_SAMPLE_RATE = 4000
 AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm", ".opus")
+MIX_EXTENSIONS = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus")
+MIX_ENCODERS = {
+    ".wav": ["-c:a", "pcm_s16le"],
+    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+    ".flac": ["-c:a", "flac"],
+    ".m4a": ["-c:a", "aac", "-b:a", "192k"],
+    ".aac": ["-c:a", "aac", "-b:a", "192k"],
+    ".ogg": ["-c:a", "libvorbis", "-q:a", "5"],
+    ".opus": ["-c:a", "libopus", "-b:a", "192k"],
+}
 
 STEMS = (
     ("vocals", "Vocals", 0),
@@ -566,6 +576,137 @@ def get_stems_status(asset_id: str) -> dict:
         return _response(asset, "error", run.get("error") or "Stem separation failed")
 
     return _response(asset, "idle")
+
+
+def _mix_output_name(asset: dict) -> str:
+    basename = os.path.basename(str(asset.get("filename") or ""))
+    base, ext = os.path.splitext(basename)
+    ext = ext.lower()
+    if ext not in MIX_EXTENSIONS:
+        ext = ".wav"
+    candidate = f"{base} - stem mix{ext}"
+    counter = 2
+    while os.path.exists(audio_path(candidate)):
+        candidate = f"{base} - stem mix {counter}{ext}"
+        counter += 1
+    return candidate
+
+
+def export_stem_mix(asset_id: str, stem_ids: list[str], volumes: dict) -> dict:
+    """Mix the requested stems into a new Library audio asset."""
+    asset = get_asset_by_id(asset_id)
+    if not asset:
+        return {"success": False, "error": "Asset not found"}
+    if not _is_audio(asset):
+        return {"success": False, "error": "Asset is not audio"}
+
+    stem_map = {stem["id"]: stem for stem in get_stem_assets(asset_id)}
+    if not stem_map:
+        return {"success": False, "error": "No stems found for this asset"}
+
+    valid_stems = []
+    seen = set()
+    for stem_id in stem_ids or []:
+        if stem_id in seen:
+            continue
+        seen.add(stem_id)
+        stem = stem_map.get(stem_id)
+        if not stem:
+            continue
+        try:
+            volume = float(volumes.get(stem_id, 1))
+        except Exception:
+            volume = 1.0
+        volume = max(0.0, min(1.0, volume))
+        if volume <= 0:
+            continue
+        path = audio_path(stem["filename"])
+        if not os.path.isfile(path):
+            continue
+        valid_stems.append((stem_id, stem["filename"], path, round(volume, 4)))
+
+    if not valid_stems:
+        return {"success": False, "error": "No valid stems selected for mixing"}
+
+    ffmpeg = _find_binary("ffmpeg")
+    if not ffmpeg:
+        return {"success": False, "error": "ffmpeg is required to export a stem mix"}
+
+    output_filename = _mix_output_name(asset)
+    output_path = audio_path(output_filename)
+
+    command = [ffmpeg, "-y", "-v", "error"]
+    for _stem_id, filename, _path, _volume in valid_stems:
+        command.extend(["-i", audio_path(filename)])
+
+    filters = []
+    if len(valid_stems) == 1:
+        filters.append(f"[0:a]volume={valid_stems[0][3]},alimiter=limit=0.95[out]")
+    else:
+        labels = []
+        for index, (_stem_id, _filename, _path, volume) in enumerate(valid_stems):
+            filters.append(f"[{index}:a]volume={volume}[v{index}]")
+            labels.append(f"[v{index}]")
+        filters.append(
+            f"{''.join(labels)}amix=inputs={len(valid_stems)}:duration=longest:normalize=0[amixed]"
+        )
+        filters.append("[amixed]alimiter=limit=0.95[out]")
+
+    command.extend(["-filter_complex", ";".join(filters), "-map", "[out]"])
+    command.extend(MIX_ENCODERS[os.path.splitext(output_filename)[1].lower()])
+    command.append(output_path)
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        return {"success": False, "error": f"Stem mix failed: {exc}"}
+
+    if result.returncode != 0 or not os.path.isfile(output_path):
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        tail = (result.stderr or "")[-300:]
+        return {"success": False, "error": f"Stem mix failed: {tail}"}
+
+    source_name = _source_name(asset)
+    name = f"{source_name} - stem mix"
+    duration = get_audio_duration(output_filename) or _asset_duration(asset)
+    metadata = {
+        "name": name,
+        "source": "stem-mix",
+        "kind": "stem-mix",
+        "duration": duration,
+        "waveform": get_audio_waveform(output_filename),
+        "stem_mix": {
+            "source_id": asset_id,
+            "stem_ids": [item[0] for item in valid_stems],
+            "volumes": {item[0]: item[3] for item in valid_stems},
+        },
+    }
+
+    try:
+        new_asset_id = save_generation(
+            prompt=name,
+            filename=output_filename,
+            file_type="audio",
+            duration=duration,
+            parent_id=asset_id,
+            derived_from=[asset_id] + [item[0] for item in valid_stems],
+            metadata=metadata,
+        )
+    except Exception as exc:
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        return {"success": False, "error": f"Failed to save stem mix: {exc}"}
+
+    return {
+        "success": True,
+        "asset_id": new_asset_id,
+        "filename": output_filename,
+        "duration": duration,
+        "stem_count": len(valid_stems),
+    }
 
 
 async def separate_stems(asset_id: str, job_id: str = "") -> dict:

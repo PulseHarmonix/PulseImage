@@ -51,6 +51,15 @@ export interface GenMetadata {
   }
   h3?: Record<string, unknown>
   ltx?: Record<string, unknown>
+  motion?: {
+    preset_id: string
+    preset_name: string
+    source_asset_id?: string
+    model: 'ltx' | 'fasth3'
+    ltx_version?: string
+    fasth3_mode?: string
+    prompt?: string
+  }
   [key: string]: unknown
 }
 

@@ -64,6 +64,7 @@ def init_db() -> None:
             status TEXT DEFAULT 'draft',
             video_asset_id TEXT,
             video_filename TEXT,
+            follow_on INTEGER DEFAULT 0,
             error TEXT DEFAULT '',
             created TEXT DEFAULT (datetime('now')),
             last_updated TEXT DEFAULT (datetime('now'))
@@ -78,5 +79,8 @@ def init_db() -> None:
         conn.execute("ALTER TABLE generations ADD COLUMN character INTEGER DEFAULT 0")
     if "voice" not in gen_cols:
         conn.execute("ALTER TABLE generations ADD COLUMN voice INTEGER DEFAULT 0")
+    seg_cols = [r[1] for r in conn.execute("PRAGMA table_info(music_segments)").fetchall()]
+    if "follow_on" not in seg_cols:
+        conn.execute("ALTER TABLE music_segments ADD COLUMN follow_on INTEGER DEFAULT 0")
     conn.commit()
     conn.close()

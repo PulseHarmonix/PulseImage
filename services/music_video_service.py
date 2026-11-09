@@ -156,7 +156,9 @@ def _slot_dict(row) -> dict:
 
 
 def _segment_dict(row) -> dict:
-    return dict(row)
+    d = dict(row)
+    d["follow_on"] = bool(d.get("follow_on"))
+    return d
 
 
 def list_projects() -> list[dict]:
@@ -568,6 +570,9 @@ def update_segment(segment_id: str, data: dict) -> Optional[dict]:
     if "prompt" in data:
         fields.append("prompt = ?")
         values.append(data.get("prompt") or "")
+    if "follow_on" in data:
+        fields.append("follow_on = ?")
+        values.append(1 if data.get("follow_on") else 0)
 
     if fields:
         fields.append("last_updated = ?")
@@ -580,6 +585,32 @@ def update_segment(segment_id: str, data: dict) -> Optional[dict]:
     seg = conn.execute("SELECT * FROM music_segments WHERE id = ?", (segment_id,)).fetchone()
     conn.close()
     return _segment_dict(seg) if seg else None
+
+
+def get_previous_segment(segment_id: str) -> Optional[dict]:
+    """Return the previous segment in the same slot, ordered by start/created."""
+    conn = get_db()
+    current = conn.execute(
+        "SELECT * FROM music_segments WHERE id = ?", (segment_id,)
+    ).fetchone()
+    if not current:
+        conn.close()
+        return None
+    row = conn.execute(
+        "SELECT * FROM music_segments "
+        "WHERE slot_id = ? AND id != ? AND "
+        "(start_time < ? OR (start_time = ? AND created < ?)) "
+        "ORDER BY start_time DESC, created DESC LIMIT 1",
+        (
+            current["slot_id"],
+            segment_id,
+            current["start_time"],
+            current["start_time"],
+            current["created"],
+        ),
+    ).fetchone()
+    conn.close()
+    return _segment_dict(row) if row else None
 
 
 def delete_segment(segment_id: str) -> bool:

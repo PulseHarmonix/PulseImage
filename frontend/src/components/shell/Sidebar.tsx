@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   AudioLines,
+  Camera,
   Clapperboard,
   Frame,
   Image,
@@ -36,6 +37,7 @@ const workspaceNav = [
   { label: 'Library', icon: Library, to: '/library' },
   { label: 'Music', icon: Music2, to: '/songs' },
   { label: 'Music Video', icon: AudioLines, to: '/music' },
+  { label: 'Motion', icon: Camera, to: '/motion' },
   { label: 'Single Frame', icon: Frame, to: '/frames' },
   { label: 'Voices', icon: Mic2, to: '/voices' },
 ]

@@ -30,6 +30,20 @@ export interface StemResponse {
   stems: StemInfo[]
 }
 
+export interface StemMixSelection {
+  stemIds: string[]
+  volumes: Record<string, number>
+}
+
+export interface StemMixResponse {
+  success: boolean
+  error?: string
+  asset_id?: string
+  filename?: string
+  duration?: number
+  stem_count?: number
+}
+
 export interface StemCapabilities {
   available: boolean
   comfy_connected: boolean

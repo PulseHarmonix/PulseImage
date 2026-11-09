@@ -35,6 +35,7 @@ from services.music_video_service import (
     set_segment_status,
     set_segment_result,
     get_segment_context,
+    get_previous_segment,
 )
 from services.audio_service import (
     trim_audio,
@@ -42,10 +43,23 @@ from services.audio_service import (
     get_audio_duration,
     AudioError,
 )
-from services.comfy_service import generate_single_image_audio_to_video
+from services.comfy_service import (
+    generate_single_image_audio_to_video,
+    generate_single_image_to_video,
+)
 from services.generation_service import save_generation
+from services.lwks_export_service import (
+    build_lwks_zip,
+    LwksExportError,
+    LwksProjectNotFound,
+)
 from services.comfy_progress import set_progress_job
 from services.video_upscale_service import maybe_upscale_video_result
+from services.video_frame_service import (
+    extract_full_frame,
+    probe_video,
+    VideoFrameError,
+)
 
 router = APIRouter()
 
@@ -253,6 +267,23 @@ def download_segment_zip(project_id: str):
     )
 
 
+@router.get("/music/projects/{project_id}/lwks")
+def download_lightworks_export(project_id: str):
+    """Export the project as a Lightworks FCP7 XML package."""
+    try:
+        zip_path, download_name = build_lwks_zip(project_id)
+    except LwksProjectNotFound:
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    except LwksExportError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=download_name,
+        background=BackgroundTask(os.remove, zip_path),
+    )
+
+
 @router.post("/music/segments/{segment_id}/generate")
 async def generate_music_segment(segment_id: str, request: Request):
     """Trim the project audio to the segment range and generate an LTX video."""
@@ -281,11 +312,6 @@ async def generate_music_segment(segment_id: str, request: Request):
     if not audio_filename:
         return {"success": False, "error": "No audio track set for this project"}
 
-    image = slot.get("image") or {}
-    image_filename = image.get("filename")
-    if not image_filename:
-        return {"success": False, "error": f"No image set for slot '{slot.get('name') or 'character'}'"}
-
     start = segment.get("start_time") or 0
     end = segment.get("end_time") or 0
     if end <= start:
@@ -294,6 +320,46 @@ async def generate_music_segment(segment_id: str, request: Request):
     prompt = (segment.get("prompt") or "").strip()
     if not prompt:
         return {"success": False, "error": "Prompt is required for this segment"}
+
+    follow_on = bool(segment.get("follow_on"))
+
+    image = slot.get("image") or {}
+    image_filename = image.get("filename")
+    previous_segment = None
+    previous_video_asset_id = None
+    frame_offset = 0.0
+    temp_frame_filename = None
+
+    if follow_on:
+        previous_segment = get_previous_segment(segment_id)
+        if not previous_segment:
+            return {"success": False, "error": "No previous segment to follow on from"}
+        previous_video_filename = previous_segment.get("video_filename")
+        previous_video_asset_id = previous_segment.get("video_asset_id") or None
+        if not previous_video_filename:
+            return {
+                "success": False,
+                "error": "Previous segment has no generated video to follow on from",
+            }
+        if not os.path.isfile(os.path.join("videos", previous_video_filename)):
+            return {
+                "success": False,
+                "error": f"Previous segment video not found: {previous_video_filename}",
+            }
+        try:
+            info = probe_video(previous_video_filename)
+            prev_duration = float(info.get("duration") or 0)
+            prev_fps = float(info.get("fps") or 0) or 24.0
+            previous_start = float(previous_segment.get("start_time") or 0)
+            frame_offset = max(0.0, float(start) - previous_start)
+            frame_offset = min(frame_offset, max(0.0, prev_duration - 1.0 / prev_fps))
+            frame = extract_full_frame(previous_video_filename, frame_offset)
+        except VideoFrameError as e:
+            return {"success": False, "error": str(e)}
+        temp_frame_filename = frame.get("filename")
+        image_filename = temp_frame_filename
+    elif not image_filename:
+        return {"success": False, "error": f"No image set for slot '{slot.get('name') or 'character'}'"}
 
     settings = project.get("settings") or {}
     resolution = settings.get("resolution") or "720p"
@@ -309,105 +375,138 @@ async def generate_music_segment(segment_id: str, request: Request):
     elif project_model == "grok":
         video_model = "grok"
 
-    set_segment_status(segment_id, "generating")
-
-    trimmed_filename = None
     try:
-        trimmed_filename = trim_audio(audio_filename, start, end)
-    except AudioError as e:
-        set_segment_status(segment_id, "error", str(e))
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        set_segment_status(segment_id, "error", str(e))
-        return {"success": False, "error": str(e)}
+        set_segment_status(segment_id, "generating")
 
-    try:
-        result = await generate_single_image_audio_to_video(
-            image_filename,
-            trimmed_filename,
-            prompt,
-            resolution,
-            aspect_ratio,
-            duration,
-            ltx_version=ltx_version,
-            video_model=video_model,
+        follow_on_i2v = follow_on and video_model == "fasth3"
+
+        trimmed_filename = None
+        if not follow_on_i2v:
+            try:
+                trimmed_filename = trim_audio(audio_filename, start, end)
+            except AudioError as e:
+                set_segment_status(segment_id, "error", str(e))
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                set_segment_status(segment_id, "error", str(e))
+                return {"success": False, "error": str(e)}
+
+        try:
+            if follow_on_i2v:
+                result = await generate_single_image_to_video(
+                    image_filename,
+                    prompt,
+                    resolution,
+                    aspect_ratio,
+                    duration,
+                    video_model=video_model,
+                )
+            else:
+                result = await generate_single_image_audio_to_video(
+                    image_filename,
+                    trimmed_filename,
+                    prompt,
+                    resolution,
+                    aspect_ratio,
+                    duration,
+                    ltx_version=ltx_version,
+                    video_model=video_model,
+                )
+        except Exception as e:
+            set_segment_status(segment_id, "error", str(e))
+            if trimmed_filename:
+                delete_audio(trimmed_filename)
+            return {"success": False, "error": str(e)}
+
+        if trimmed_filename:
+            delete_audio(trimmed_filename)
+
+        if not result or not result.get("success"):
+            err = (result or {}).get("error") or "Video generation failed"
+            set_segment_status(segment_id, "error", err)
+            return {"success": False, "error": err}
+
+        result = await maybe_upscale_video_result(
+            result, job_id=job_id, requested=video_upscale, detail=upscale_detail
         )
-    except Exception as e:
-        set_segment_status(segment_id, "error", str(e))
-        delete_audio(trimmed_filename)
-        return {"success": False, "error": str(e)}
 
-    delete_audio(trimmed_filename)
+        local_filename = result.get("local_filename")
+        width = result.get("width", 0)
+        height = result.get("height", 0)
+        out_duration = result.get("duration", duration)
 
-    if not result or not result.get("success"):
-        err = (result or {}).get("error") or "Video generation failed"
-        set_segment_status(segment_id, "error", err)
-        return {"success": False, "error": err}
+        previous_id = previous_segment.get("id") if previous_segment else None
+        parent_id = previous_video_asset_id if follow_on else (image.get("asset_id") or None)
+        derived_from = []
+        for ref in (image.get("asset_id"), parent_id):
+            if ref and ref not in derived_from:
+                derived_from.append(ref)
+        export_name = segment_export_name(
+            project.get("title") or "",
+            start,
+            slot.get("name") or "",
+            offset_frames=offset,
+        )
 
-    result = await maybe_upscale_video_result(
-        result, job_id=job_id, requested=video_upscale, detail=upscale_detail
-    )
+        asset_id = save_generation(
+            prompt=prompt,
+            filename=local_filename,
+            file_type="video",
+            aspect_ratio=aspect_ratio,
+            width=width,
+            height=height,
+            duration=out_duration,
+            parent_id=parent_id,
+            derived_from=derived_from,
+            metadata={
+                "name": export_name,
+                "gen": {
+                    "mode": "video",
+                    "video_model": video_model,
+                    "ltx_version": ltx_version if video_model == "ltx" else None,
+                    "fasth3_mode": "i2v"
+                    if follow_on_i2v
+                    else ("reference" if video_model == "fasth3" else None),
+                    "resolution": resolution,
+                    "aspect_ratio": aspect_ratio,
+                    "duration": out_duration,
+                    "original_prompt": prompt,
+                    "video_upscale": "relayvsr_x2"
+                    if (result.get("upscale") or {}).get("status") == "done"
+                    else "off",
+                },
+                "music": {
+                    "project_id": project.get("id"),
+                    "slot_id": slot.get("id"),
+                    "segment_id": segment_id,
+                    "character": slot.get("name") or "",
+                    "start_time": start,
+                    "end_time": end,
+                    "model": project_model,
+                    "offset_frames": offset,
+                    "follow_on": follow_on,
+                    "follow_on_from_segment_id": previous_id if follow_on else None,
+                    "follow_on_from_asset_id": previous_video_asset_id if follow_on else None,
+                    "follow_on_time": round(frame_offset, 3) if follow_on else None,
+                },
+                "upscale": result.get("upscale"),
+            },
+        )
 
-    local_filename = result.get("local_filename")
-    width = result.get("width", 0)
-    height = result.get("height", 0)
-    out_duration = result.get("duration", duration)
+        set_segment_result(segment_id, asset_id, local_filename)
 
-    parent_id = image.get("asset_id") or None
-    export_name = segment_export_name(
-        project.get("title") or "",
-        start,
-        slot.get("name") or "",
-        offset_frames=offset,
-    )
-
-    asset_id = save_generation(
-        prompt=prompt,
-        filename=local_filename,
-        file_type="video",
-        aspect_ratio=aspect_ratio,
-        width=width,
-        height=height,
-        duration=out_duration,
-        parent_id=parent_id,
-        derived_from=[parent_id] if parent_id else [],
-        metadata={
+        return {
+            "success": True,
+            "asset_id": asset_id,
+            "filename": local_filename,
             "name": export_name,
-            "gen": {
-                "mode": "video",
-                "video_model": video_model,
-                "ltx_version": ltx_version if video_model == "ltx" else None,
-                "fasth3_mode": "reference" if video_model == "fasth3" else None,
-                "resolution": resolution,
-                "aspect_ratio": aspect_ratio,
-                "duration": out_duration,
-                "original_prompt": prompt,
-                "video_upscale": "relayvsr_x2"
-                if (result.get("upscale") or {}).get("status") == "done"
-                else "off",
-            },
-            "music": {
-                "project_id": project.get("id"),
-                "slot_id": slot.get("id"),
-                "segment_id": segment_id,
-                "character": slot.get("name") or "",
-                "start_time": start,
-                "end_time": end,
-                "model": project_model,
-                "offset_frames": offset,
-            },
-            "upscale": result.get("upscale"),
-        },
-    )
-
-    set_segment_result(segment_id, asset_id, local_filename)
-
-    return {
-        "success": True,
-        "asset_id": asset_id,
-        "filename": local_filename,
-        "name": export_name,
-        "width": width,
-        "height": height,
-        "duration": out_duration,
-    }
+            "width": width,
+            "height": height,
+            "duration": out_duration,
+        }
+    finally:
+        if temp_frame_filename:
+            try:
+                os.remove(os.path.join("images", temp_frame_filename))
+            except OSError:
+                pass

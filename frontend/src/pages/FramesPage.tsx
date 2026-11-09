@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys, useHistory } from '../lib/queries'
 import { apiPost, mediaUrl } from '../lib/api'
+import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import { Badge, Button, EmptyState, Input, Spinner } from '../components/ui'
 import { cn, formatTimecode, titleFromPrompt } from '../lib/utils'
@@ -199,7 +200,7 @@ export function FramesPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-4 pb-10 pt-16 md:px-8 md:pt-8">
+    <PageContainer>
       <PageHeader
         eyebrow="Single frame"
         title="Pull the perfect frame."
@@ -376,6 +377,6 @@ export function FramesPage() {
           )}
         </section>
       </div>
-    </div>
+    </PageContainer>
   )
 }

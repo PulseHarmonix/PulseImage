@@ -8,6 +8,7 @@ import {
   stemRank,
   type StemInfo,
   type StemMeta,
+  type StemMixSelection,
   type StemSource,
 } from '../../lib/stems'
 import { clamp, cn } from '../../lib/utils'
@@ -15,6 +16,7 @@ import { AudioWaveform } from './AudioWaveform'
 
 interface MixerRow {
   key: string
+  stemId?: string
   name: string
   filename: string
   waveform?: number[]
@@ -24,7 +26,15 @@ interface MixerRow {
   rank: number
 }
 
-export function StemMixer({ source, stems }: { source: StemSource; stems: StemInfo[] }) {
+export function StemMixer({
+  source,
+  stems,
+  onMixChange,
+}: {
+  source: StemSource
+  stems: StemInfo[]
+  onMixChange?: (selection: StemMixSelection) => void
+}) {
   const rows = useMemo<MixerRow[]>(() => {
     const original: MixerRow = {
       key: 'original',
@@ -42,6 +52,7 @@ export function StemMixer({ source, stems }: { source: StemSource; stems: StemIn
       const meta = stemMeta(stem.stem)
       return {
         key: stem.id ? `stem-${stem.id}` : `${normalized || 'stem'}-${index}`,
+        stemId: stem.id,
         name: stem.name || meta.label,
         filename: stem.filename,
         waveform: stem.waveform,
@@ -83,6 +94,26 @@ export function StemMixer({ source, stems }: { source: StemSource; stems: StemIn
     (row: MixerRow) => clamp(volumes[row.key] ?? 1, 0, 1),
     [volumes],
   )
+
+  const mixSelection = useMemo<StemMixSelection>(() => {
+    const hasSolo = rows.some((row) => Boolean(solo[row.key]))
+    const stemIds: string[] = []
+    const stemVolumes: Record<string, number> = {}
+    for (const row of rows) {
+      if (row.isOriginal || !row.stemId) continue
+      const audible = hasSolo ? Boolean(solo[row.key]) : !isRowMuted(row)
+      if (!audible) continue
+      const volume = rowVolume(row)
+      if (volume <= 0) continue
+      stemIds.push(row.stemId)
+      stemVolumes[row.stemId] = volume
+    }
+    return { stemIds, volumes: stemVolumes }
+  }, [rows, solo, isRowMuted, rowVolume])
+
+  useEffect(() => {
+    onMixChange?.(mixSelection)
+  }, [mixSelection, onMixChange])
 
   const pauseAll = useCallback(() => {
     for (const audio of audioRefs.current.values()) audio.pause()
