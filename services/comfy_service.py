@@ -50,10 +50,14 @@ from utils.video_workflow_utils import (
     modify_fasth3_text_to_video_workflow,
     load_base_fasth3_image_to_video_workflow,
     modify_fasth3_image_to_video_workflow,
+    load_base_fasth3_image_audio_guide_workflow,
+    modify_fasth3_image_audio_guide_workflow,
     load_base_fasth3_reference_image_audio_to_video_workflow,
     modify_fasth3_reference_image_audio_to_video_workflow,
     load_base_fasth3_multi_ref_workflow,
     modify_fasth3_multi_ref_workflow,
+    load_base_fasth3_multi_ref_guide_workflow,
+    modify_fasth3_multi_ref_guide_workflow,
 )
 
 IMAGES_FOLDER = "images"
@@ -832,6 +836,7 @@ async def generate_single_image_to_video(
     duration: int,
     video_model: str = None,
     ltx_version: str = None,
+    audio_filename: str | None = None,
 ) -> dict:
     """
     Generate a video from a source image using the LTX image-to-video workflow.
@@ -857,10 +862,25 @@ async def generate_single_image_to_video(
 
         width, height = get_video_dimensions(resolution, aspect_ratio)
         if model == "fasth3":
-            base_workflow = load_base_fasth3_image_to_video_workflow()
-            workflow = modify_fasth3_image_to_video_workflow(
-                base_workflow, prompt, width, height, duration, comfy_image_name
-            )
+            if audio_filename:
+                comfy_audio_name = await upload_audio_to_comfy(audio_filename)
+                if not comfy_audio_name:
+                    return {"success": False, "error": "Failed to upload guide audio"}
+                base_workflow = load_base_fasth3_image_audio_guide_workflow()
+                workflow = modify_fasth3_image_audio_guide_workflow(
+                    base_workflow,
+                    prompt,
+                    width,
+                    height,
+                    duration,
+                    comfy_image_name,
+                    comfy_audio_name,
+                )
+            else:
+                base_workflow = load_base_fasth3_image_to_video_workflow()
+                workflow = modify_fasth3_image_to_video_workflow(
+                    base_workflow, prompt, width, height, duration, comfy_image_name
+                )
             save_node = "92"
         else:
             ltx_ver = resolve_ltx_version(ltx_version)
@@ -1090,11 +1110,16 @@ async def generate_fasth3_multi_ref_video(
     resolution: str,
     aspect_ratio: str,
     duration: float,
+    image_roles: list | None = None,
+    image_labels: list | None = None,
+    first_frame_filename: str | None = None,
+    audio_mode: str = "voice",
 ) -> dict:
     """Generate a FastH3 video from multiple reference images and audio clips.
 
     Uses the dedicated multi-ref workflow so the single-ref OmniRef workflow
-    (used by Music Video) is unaffected.
+    (used by Music Video) is unaffected. When ``first_frame_filename`` is set a
+    frame-0 image guide is added on top of the same multi-reference graph.
     """
     print("\n>>> [FASTH3 MULTI-REF] generate_fasth3_multi_ref_video started")
     try:
@@ -1115,11 +1140,45 @@ async def generate_fasth3_multi_ref_video(
         if not image_names and not audio_names:
             return {"success": False, "error": "No references supplied"}
 
+        comfy_first_frame_name = None
+        if first_frame_filename:
+            comfy_first_frame_name = await upload_image_to_comfy(first_frame_filename)
+            if not comfy_first_frame_name:
+                return {
+                    "success": False,
+                    "error": f"Failed to upload first-frame image: {first_frame_filename}",
+                }
+
         width, height = get_video_dimensions(resolution, aspect_ratio)
-        base_workflow = load_base_fasth3_multi_ref_workflow()
-        workflow = modify_fasth3_multi_ref_workflow(
-            base_workflow, prompt, width, height, duration, image_names, audio_names
-        )
+        if comfy_first_frame_name:
+            base_workflow = load_base_fasth3_multi_ref_guide_workflow()
+            workflow = modify_fasth3_multi_ref_guide_workflow(
+                base_workflow,
+                prompt,
+                width,
+                height,
+                duration,
+                image_names,
+                audio_names,
+                comfy_first_frame_name,
+                image_roles=image_roles,
+                image_labels=image_labels,
+                audio_mode=audio_mode,
+            )
+        else:
+            base_workflow = load_base_fasth3_multi_ref_workflow()
+            workflow = modify_fasth3_multi_ref_workflow(
+                base_workflow,
+                prompt,
+                width,
+                height,
+                duration,
+                image_names,
+                audio_names,
+                image_roles=image_roles,
+                image_labels=image_labels,
+                audio_mode=audio_mode,
+            )
         save_node = "92"
 
         async with httpx.AsyncClient(timeout=600.0) as client:

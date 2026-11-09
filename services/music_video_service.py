@@ -16,6 +16,8 @@ from typing import Any, Optional
 from services.database_service import get_db
 
 SLOT_COUNT = 8
+MAX_SLOT_IMAGES = 6
+SLOT_IMAGE_ROLES = ("background", "character", "prop", "reference")
 
 DEFAULT_SLOT_NAMES = [
     "Drummer",
@@ -148,9 +150,66 @@ def _project_dict(row) -> dict:
     return d
 
 
+def _normalize_image_dict(item: Any) -> Optional[dict]:
+    if not isinstance(item, dict):
+        return None
+    filename = (item.get("filename") or "").strip()
+    if not filename:
+        return None
+    role = str(item.get("role") or "").strip().lower()
+    if role not in SLOT_IMAGE_ROLES:
+        role = ""
+    return {
+        "asset_id": item.get("asset_id") or "",
+        "filename": filename,
+        "name": item.get("name") or "",
+        "role": role,
+        "label": item.get("label") or "",
+    }
+
+
+def _normalize_slot_images(raw_images: Any, legacy_image: Any = None) -> list[dict]:
+    """Normalize a slot image list, applying defaults, role rules and limits."""
+    raw = _parse_json(raw_images, [])
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raw = []
+
+    images = [img for img in (_normalize_image_dict(item) for item in raw) if img]
+    if not images:
+        legacy = _parse_json(legacy_image, {}) if isinstance(legacy_image, str) else legacy_image
+        legacy = _normalize_image_dict(legacy)
+        if legacy:
+            legacy["role"] = "background"
+            images.append(legacy)
+
+    images = images[:MAX_SLOT_IMAGES]
+
+    for index, img in enumerate(images):
+        if not img["role"]:
+            img["role"] = "background" if index == 0 else "character"
+
+    seen_background = False
+    for img in images:
+        if img["role"] != "background":
+            continue
+        if seen_background:
+            img["role"] = "character"
+        else:
+            seen_background = True
+
+    return images
+
+
 def _slot_dict(row) -> dict:
     d = dict(row)
-    d["image"] = _parse_json(d.get("image"), {})
+    legacy_image = _parse_json(d.get("image"), {})
+    if not isinstance(legacy_image, dict):
+        legacy_image = {}
+    images = _normalize_slot_images(d.get("images"), legacy_image)
+    d["images"] = images
+    d["image"] = dict(images[0]) if images else {}
     d["segments"] = []
     return d
 
@@ -326,7 +385,7 @@ def set_audio(project_id: str, audio: dict) -> Optional[dict]:
 
 
 def update_slot(slot_id: str, data: dict) -> Optional[dict]:
-    """Update a slot's name and/or image reference."""
+    """Update a slot's name and/or image references."""
     conn = get_db()
     row = conn.execute("SELECT * FROM music_slots WHERE id = ?", (slot_id,)).fetchone()
     if not row:
@@ -338,10 +397,15 @@ def update_slot(slot_id: str, data: dict) -> Optional[dict]:
     if "name" in data:
         fields.append("name = ?")
         values.append(data.get("name") or "")
-    if "image" in data:
-        img = data.get("image")
+    if "images" in data or "image" in data:
+        if "images" in data:
+            images = _normalize_slot_images(data.get("images"))
+        else:
+            images = _normalize_slot_images(None, data.get("image"))
+        fields.append("images = ?")
+        values.append(json.dumps(images))
         fields.append("image = ?")
-        values.append(json.dumps(img if isinstance(img, dict) else {}))
+        values.append(json.dumps(images[0] if images else {}))
 
     if fields:
         fields.append("last_updated = ?")
@@ -412,7 +476,7 @@ def auto_create_segments(project_id: str) -> dict:
 
     image_slots = [
         slot for slot in project.get("slots", [])
-        if (slot.get("image") or {}).get("filename")
+        if (slot.get("images") or []) or (slot.get("image") or {}).get("filename")
     ]
     slot_count = len(image_slots)
 

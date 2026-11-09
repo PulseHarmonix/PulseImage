@@ -8,6 +8,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
+  ChevronUp,
   Clapperboard,
   Clock3,
   Download,
@@ -70,6 +71,8 @@ interface SlotImage {
   asset_id?: string
   filename?: string
   name?: string
+  role?: 'background' | 'character' | 'prop' | 'reference'
+  label?: string
 }
 
 interface Slot {
@@ -77,7 +80,19 @@ interface Slot {
   slot_number: number
   name: string
   image?: SlotImage
+  images?: SlotImage[]
   segments?: Segment[]
+}
+
+function slotImages(slot?: Slot | null): SlotImage[] {
+  if (!slot) return []
+  if (slot.images && slot.images.length > 0) return slot.images
+  return slot.image ? [slot.image] : []
+}
+
+function primarySlotImage(slot?: Slot | null): SlotImage | undefined {
+  const images = slotImages(slot)
+  return images.find((image) => image.role === 'background') ?? images[0]
 }
 
 interface SectionTiming {
@@ -146,6 +161,15 @@ const modelOptions = [
 
 const resolutionOptions = ['480p', '720p', '1080p']
 const aspectOptions = ['16:9', '9:16', '1:1', '3:2', '2:3']
+
+const imageRoleOptions: { value: NonNullable<SlotImage['role']>; label: string }[] = [
+  { value: 'background', label: 'Background' },
+  { value: 'character', label: 'Character' },
+  { value: 'prop', label: 'Prop' },
+  { value: 'reference', label: 'Reference' },
+]
+
+const MAX_SLOT_IMAGES = 6
 
 function readSections(value: unknown): SectionTiming[] {
   const stored = Array.isArray(value) ? value : []
@@ -530,11 +554,11 @@ function SegmentRow({
               'flex items-center gap-2 text-[11px] text-text-2',
               isFirst && 'cursor-not-allowed opacity-60',
             )}
-            title={
-              isFirst
-                ? 'The first segment cannot follow on from another segment'
-                : "Use the previous segment's frame at this segment's start time"
-            }
+              title={
+                isFirst
+                  ? 'The first segment cannot follow on from another segment'
+                  : "Use the previous segment's frame as the first frame and this segment's song audio to drive the motion"
+              }
           >
             <input
               type="checkbox"
@@ -734,16 +758,18 @@ export function MusicVideoPage() {
       : undefined
     return asset ? assetDisplayName(asset) : undefined
   }
-  const selectedCharacterImage = selectedSlot?.image?.asset_id
-    ? imageAssets.find((asset) => asset.id === selectedSlot.image?.asset_id)
+  const selectedPrimaryImage = primarySlotImage(selectedSlot)
+  const selectedCharacterImage = selectedPrimaryImage?.asset_id
+    ? imageAssets.find((asset) => asset.id === selectedPrimaryImage.asset_id)
     : undefined
   const selectedCharacterImageName = selectedCharacterImage
     ? assetDisplayName(selectedCharacterImage)
-    : titleFromPrompt(selectedSlot?.image?.name || selectedSlot?.image?.filename)
+    : titleFromPrompt(selectedPrimaryImage?.name || selectedPrimaryImage?.filename)
   const selectedCharacterImageAspect =
     selectedCharacterImage?.width && selectedCharacterImage?.height
       ? selectedCharacterImage.width / selectedCharacterImage.height
       : undefined
+  const selectedSlotImages = slotImages(selectedSlot)
 
   const allSegments = useMemo(
     () =>
@@ -1105,15 +1131,22 @@ export function MusicVideoPage() {
   const generateSegment = async (segment: Segment, options?: GenerateOptions): Promise<boolean> => {
     if (!project) return false
     const slot = slots.find((item) => item.id === segment.slot_id)
+    const references = slotImages(slot)
     if (!project.audio?.filename) {
       if (!options?.silent) {
         toast({ title: 'Set an audio track first', tone: 'warning' })
       }
       return false
     }
-    if (!segment.follow_on && !slot?.image?.filename) {
+    if (!segment.follow_on && references.length === 0) {
       if (!options?.silent) {
-        toast({ title: 'Set an image for this character first', tone: 'warning' })
+        toast({ title: 'Add a reference image for this character first', tone: 'warning' })
+      }
+      return false
+    }
+    if (projectModel !== 'fasth3' && references.length > 1) {
+      if (!options?.silent) {
+        toast({ title: 'Multiple reference images require FastH3', tone: 'warning' })
       }
       return false
     }
@@ -1223,7 +1256,7 @@ export function MusicVideoPage() {
       return
     }
     const items = slots
-      .filter((slot) => Boolean(slot.image?.filename))
+      .filter((slot) => slotImages(slot).length > 0)
       .flatMap((slot) =>
         (slot.segments ?? [])
           .filter((segment) => (mode === 'all' ? true : !segment.video_filename))
@@ -1439,17 +1472,52 @@ export function MusicVideoPage() {
     await patchProject('/audio', { asset_id: '', filename: '', name: '' })
   }
 
-  const assignImage = async (assetId: string) => {
+  const addSlotImage = async (assetId: string) => {
     if (!selectedSlot) return
     const asset = imageAssets.find((item) => item.id === assetId)
     if (!asset) return
-    await updateSlot(selectedSlot.id, {
-      image: {
-        asset_id: asset.id,
-        filename: asset.filename,
-        name: asset.prompt || asset.filename,
-      },
+    const current = slotImages(selectedSlot)
+    if (current.length >= MAX_SLOT_IMAGES) {
+      toast({
+        title: `A slot can have up to ${MAX_SLOT_IMAGES} images`,
+        tone: 'warning',
+      })
+      return
+    }
+    const image: SlotImage = {
+      asset_id: asset.id,
+      filename: asset.filename,
+      name: asset.prompt || asset.filename,
+      role: current.length ? 'character' : 'background',
+    }
+    await updateSlot(selectedSlot.id, { images: [...current, image] })
+  }
+
+  const updateSlotImage = async (index: number, patch: Partial<SlotImage>) => {
+    if (!selectedSlot) return
+    const images = slotImages(selectedSlot).map((image, imageIndex) => {
+      if (imageIndex === index) return { ...image, ...patch }
+      if (patch.role === 'background' && image.role === 'background') {
+        return { ...image, role: 'character' as const }
+      }
+      return image
     })
+    await updateSlot(selectedSlot.id, { images })
+  }
+
+  const moveSlotImage = async (index: number, direction: -1 | 1) => {
+    if (!selectedSlot) return
+    const images = [...slotImages(selectedSlot)]
+    const target = index + direction
+    if (target < 0 || target >= images.length) return
+    ;[images[index], images[target]] = [images[target], images[index]]
+    await updateSlot(selectedSlot.id, { images })
+  }
+
+  const removeSlotImage = async (index: number) => {
+    if (!selectedSlot) return
+    const images = slotImages(selectedSlot).filter((_, imageIndex) => imageIndex !== index)
+    await updateSlot(selectedSlot.id, { images })
   }
 
   const downloadZip = () => {
@@ -1897,9 +1965,9 @@ export function MusicVideoPage() {
                         )}
                       >
                         <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded bg-black">
-                          {slot.image?.filename ? (
+                          {primarySlotImage(slot)?.filename ? (
                             <img
-                              src={mediaUrl(`/images/${slot.image.filename}`)}
+                              src={mediaUrl(`/images/${primarySlotImage(slot)?.filename}`)}
                               alt=""
                               className="size-full object-cover"
                             />
@@ -1964,9 +2032,9 @@ export function MusicVideoPage() {
                         )}
                       >
                         <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-black">
-                          {slot.image?.filename ? (
+                          {primarySlotImage(slot)?.filename ? (
                             <img
-                              src={mediaUrl(`/images/${slot.image.filename}`)}
+                              src={mediaUrl(`/images/${primarySlotImage(slot)?.filename}`)}
                               alt=""
                               className="size-full object-cover"
                             />
@@ -1999,43 +2067,126 @@ export function MusicVideoPage() {
                         className="h-9 text-xs"
                         aria-label="Character name"
                       />
-                      <Select
-                        value={selectedSlot.image?.asset_id || ''}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          if (value === '__preview__' && previewImage) {
-                            void assignImage(previewImage.id)
-                          } else if (value) {
-                            void assignImage(value)
-                          }
-                        }}
-                      >
-                        {previewImage ? (
-                          <option value="__preview__">
-                            Use from preview — {assetDisplayName(previewImage)}
-                          </option>
-                        ) : null}
-                        <option value="" disabled>
-                          Assign character image.
-                        </option>
-                        {imageAssets.map((asset) => (
-                          <option key={asset.id} value={asset.id}>
-                            {titleFromPrompt(asset.prompt || asset.filename)}
-                          </option>
+                      <div className="space-y-2">
+                        {selectedSlotImages.slice(0, MAX_SLOT_IMAGES).map((image, index) => (
+                          <div
+                            key={`${selectedSlot.id}:${index}:${image.asset_id ?? image.filename ?? ''}`}
+                            className="space-y-1.5 rounded-xl border border-line bg-black/20 p-2"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-black">
+                                {image.filename ? (
+                                  <img
+                                    src={mediaUrl(`/images/${image.filename}`)}
+                                    alt=""
+                                    className="size-full object-cover"
+                                  />
+                                ) : (
+                                  <Users className="size-3.5 text-text-3" />
+                                )}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-text-2">
+                                Image {index + 1}
+                              </span>
+                              <IconButton
+                                variant="ghost"
+                                className="size-7"
+                                disabled={index === 0}
+                                onClick={() => void moveSlotImage(index, -1)}
+                                aria-label={`Move image ${index + 1} up`}
+                                title="Move up"
+                              >
+                                <ChevronUp className="size-3.5" />
+                              </IconButton>
+                              <IconButton
+                                variant="ghost"
+                                className="size-7"
+                                disabled={index === selectedSlotImages.length - 1}
+                                onClick={() => void moveSlotImage(index, 1)}
+                                aria-label={`Move image ${index + 1} down`}
+                                title="Move down"
+                              >
+                                <ChevronDown className="size-3.5" />
+                              </IconButton>
+                              <IconButton
+                                variant="ghost"
+                                className="size-7"
+                                onClick={() => void removeSlotImage(index)}
+                                aria-label={`Remove image ${index + 1}`}
+                                title="Remove"
+                              >
+                                <X className="size-3.5" />
+                              </IconButton>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <Select
+                                value={image.role || 'character'}
+                                onChange={(event) =>
+                                  void updateSlotImage(index, {
+                                    role: event.target.value as NonNullable<SlotImage['role']>,
+                                  })
+                                }
+                                aria-label={`Image ${index + 1} role`}
+                              >
+                                {imageRoleOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Input
+                                key={`${selectedSlot.id}:${index}:label`}
+                                defaultValue={image.label ?? ''}
+                                onBlur={(event) => {
+                                  const label = event.currentTarget.value.trim()
+                                  if (label !== (image.label ?? '')) {
+                                    void updateSlotImage(index, { label })
+                                  }
+                                }}
+                                placeholder="Label (optional)"
+                                className="h-9 text-xs"
+                                aria-label={`Image ${index + 1} label`}
+                              />
+                            </div>
+                          </div>
                         ))}
-                      </Select>
-                      {selectedSlot.image?.filename ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full"
-                          busy={busy === `slot-${selectedSlot.id}`}
-                          onClick={() => void updateSlot(selectedSlot.id, { image: {} })}
-                          icon={<X className="size-3.5" />}
+                        <Select
+                          value=""
+                          onChange={(event) => {
+                            const value = event.target.value
+                            if (value === '__preview__' && previewImage) {
+                              void addSlotImage(previewImage.id)
+                            } else if (value) {
+                              void addSlotImage(value)
+                            }
+                          }}
+                          disabled={selectedSlotImages.length >= MAX_SLOT_IMAGES}
                         >
-                          Remove image
-                        </Button>
-                      ) : null}
+                          {previewImage ? (
+                            <option value="__preview__">
+                              Use from preview — {assetDisplayName(previewImage)}
+                            </option>
+                          ) : null}
+                          <option value="" disabled>
+                            {selectedSlotImages.length ? 'Add reference image' : 'Assign character image'}
+                          </option>
+                          {imageAssets.map((asset) => (
+                            <option key={asset.id} value={asset.id}>
+                              {titleFromPrompt(asset.prompt || asset.filename)}
+                            </option>
+                          ))}
+                        </Select>
+                        {selectedSlotImages.length >= MAX_SLOT_IMAGES ? (
+                          <p className="text-[10px] text-text-3">
+                            Maximum {MAX_SLOT_IMAGES} reference images.
+                          </p>
+                        ) : null}
+                        {projectModel !== 'fasth3' && selectedSlotImages.length > 1 ? (
+                          <p className="text-[10px] text-warning">
+                            Multiple reference images require FastH3.
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -2055,7 +2206,7 @@ export function MusicVideoPage() {
                     <div
                       className={cn(
                         'relative overflow-hidden rounded-2xl border border-line bg-black',
-                        (!selectedSlot?.image?.filename || !selectedCharacterImageAspect) &&
+                        (!selectedPrimaryImage?.filename || !selectedCharacterImageAspect) &&
                           'aspect-video',
                       )}
                       style={
@@ -2066,10 +2217,10 @@ export function MusicVideoPage() {
                       aria-label={`Character image for ${selectedSlot?.name || 'character'}`}
                       title={selectedCharacterImageName}
                     >
-                      {selectedSlot?.image?.filename ? (
+                      {selectedPrimaryImage?.filename ? (
                         <img
-                          src={mediaUrl(`/images/${selectedSlot.image.filename}`)}
-                          alt={selectedCharacterImageName || selectedSlot.name}
+                          src={mediaUrl(`/images/${selectedPrimaryImage.filename}`)}
+                          alt={selectedCharacterImageName || selectedSlot?.name || 'Character'}
                           className="size-full object-cover"
                         />
                       ) : (

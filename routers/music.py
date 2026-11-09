@@ -36,6 +36,7 @@ from services.music_video_service import (
     set_segment_result,
     get_segment_context,
     get_previous_segment,
+    MAX_SLOT_IMAGES,
 )
 from services.audio_service import (
     trim_audio,
@@ -46,6 +47,7 @@ from services.audio_service import (
 from services.comfy_service import (
     generate_single_image_audio_to_video,
     generate_single_image_to_video,
+    generate_fasth3_multi_ref_video,
 )
 from services.generation_service import save_generation
 from services.lwks_export_service import (
@@ -68,6 +70,22 @@ def _safe_name(value: str, fallback: str = "segment") -> str:
     value = re.sub(r'[\\/:*?"<>|]+', "-", (value or "").strip())
     value = re.sub(r"\s+", " ", value).strip(" .")
     return value or fallback
+
+
+def _slot_reference_images(slot: dict) -> list[dict]:
+    images = [dict(img) for img in (slot.get("images") or []) if isinstance(img, dict)]
+    if images:
+        return images
+    image = slot.get("image") or {}
+    if (image.get("filename") or "").strip():
+        return [{
+            "asset_id": image.get("asset_id") or "",
+            "filename": image["filename"],
+            "name": image.get("name") or "",
+            "role": "background",
+            "label": image.get("label") or "",
+        }]
+    return []
 
 
 # === Projects ===
@@ -323,12 +341,12 @@ async def generate_music_segment(segment_id: str, request: Request):
 
     follow_on = bool(segment.get("follow_on"))
 
-    image = slot.get("image") or {}
-    image_filename = image.get("filename")
+    reference_images = _slot_reference_images(slot)
     previous_segment = None
     previous_video_asset_id = None
     frame_offset = 0.0
     temp_frame_filename = None
+    follow_on_background_replaced = False
 
     if follow_on:
         previous_segment = get_previous_segment(segment_id)
@@ -357,9 +375,38 @@ async def generate_music_segment(segment_id: str, request: Request):
         except VideoFrameError as e:
             return {"success": False, "error": str(e)}
         temp_frame_filename = frame.get("filename")
-        image_filename = temp_frame_filename
-    elif not image_filename:
+        frame_image = {
+            "asset_id": "",
+            "filename": temp_frame_filename,
+            "name": "",
+            "role": "background",
+            "label": "",
+        }
+        background_index = next(
+            (
+                i
+                for i, img in enumerate(reference_images)
+                if str(img.get("role") or "").lower() == "background"
+            ),
+            None,
+        )
+        if background_index is not None:
+            reference_images[background_index] = frame_image
+            follow_on_background_replaced = True
+        else:
+            reference_images.insert(0, frame_image)
+    elif not reference_images:
         return {"success": False, "error": f"No image set for slot '{slot.get('name') or 'character'}'"}
+
+    reference_images = [
+        img for img in reference_images if (img.get("filename") or "").strip()
+    ]
+    reference_images = reference_images[:MAX_SLOT_IMAGES]
+    image_filenames = [img["filename"] for img in reference_images]
+    image_roles = [img.get("role") or "" for img in reference_images]
+    image_labels = [img.get("label") or "" for img in reference_images]
+    image = reference_images[0] if reference_images else {}
+    image_filename = image.get("filename")
 
     settings = project.get("settings") or {}
     resolution = settings.get("resolution") or "720p"
@@ -376,23 +423,47 @@ async def generate_music_segment(segment_id: str, request: Request):
         video_model = "grok"
 
     try:
+        if video_model != "fasth3" and len(image_filenames) > 1:
+            if follow_on:
+                err = (
+                    "Multiple reference images are not supported for LTX follow-on "
+                    "segments; use FastH3 or a single reference image."
+                )
+            else:
+                err = "Multiple reference images require the FastH3 model."
+            set_segment_status(segment_id, "error", err)
+            return {"success": False, "error": err}
+
         set_segment_status(segment_id, "generating")
 
-        follow_on_i2v = follow_on and video_model == "fasth3"
+        use_multi_ref = video_model == "fasth3" and len(image_filenames) > 1
+        follow_on_i2v = follow_on and video_model == "fasth3" and not use_multi_ref
 
         trimmed_filename = None
-        if not follow_on_i2v:
-            try:
-                trimmed_filename = trim_audio(audio_filename, start, end)
-            except AudioError as e:
-                set_segment_status(segment_id, "error", str(e))
-                return {"success": False, "error": str(e)}
-            except Exception as e:
-                set_segment_status(segment_id, "error", str(e))
-                return {"success": False, "error": str(e)}
+        try:
+            trimmed_filename = trim_audio(audio_filename, start, end)
+        except AudioError as e:
+            set_segment_status(segment_id, "error", str(e))
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            set_segment_status(segment_id, "error", str(e))
+            return {"success": False, "error": str(e)}
 
         try:
-            if follow_on_i2v:
+            if use_multi_ref:
+                result = await generate_fasth3_multi_ref_video(
+                    image_filenames,
+                    [trimmed_filename],
+                    prompt,
+                    resolution,
+                    aspect_ratio,
+                    duration,
+                    image_roles=image_roles,
+                    image_labels=image_labels,
+                    first_frame_filename=temp_frame_filename if follow_on else None,
+                    audio_mode="music",
+                )
+            elif follow_on_i2v:
                 result = await generate_single_image_to_video(
                     image_filename,
                     prompt,
@@ -400,6 +471,7 @@ async def generate_music_segment(segment_id: str, request: Request):
                     aspect_ratio,
                     duration,
                     video_model=video_model,
+                    audio_filename=trimmed_filename,
                 )
             else:
                 result = await generate_single_image_audio_to_video(
@@ -464,9 +536,15 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "mode": "video",
                     "video_model": video_model,
                     "ltx_version": ltx_version if video_model == "ltx" else None,
-                    "fasth3_mode": "i2v"
-                    if follow_on_i2v
-                    else ("reference" if video_model == "fasth3" else None),
+                    "fasth3_mode": (
+                        ("multi_ref_guide" if follow_on else "multi_ref")
+                        if use_multi_ref
+                        else (
+                            "i2v_audio_guide"
+                            if follow_on_i2v
+                            else ("reference" if video_model == "fasth3" else None)
+                        )
+                    ),
                     "resolution": resolution,
                     "aspect_ratio": aspect_ratio,
                     "duration": out_duration,
@@ -484,10 +562,24 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "end_time": end,
                     "model": project_model,
                     "offset_frames": offset,
+                    "audio_source": "project_segment",
+                    "audio_used_for_generation": True,
+                    "audio_muxed_from_project": False,
                     "follow_on": follow_on,
                     "follow_on_from_segment_id": previous_id if follow_on else None,
                     "follow_on_from_asset_id": previous_video_asset_id if follow_on else None,
                     "follow_on_time": round(frame_offset, 3) if follow_on else None,
+                    "follow_on_background_replaced": follow_on_background_replaced,
+                    "follow_on_first_frame": bool(follow_on and video_model == "fasth3"),
+                    "reference_images": [
+                        {
+                            "filename": img["filename"],
+                            "role": img.get("role") or "",
+                            "label": img.get("label") or "",
+                            "asset_id": img.get("asset_id") or "",
+                        }
+                        for img in reference_images
+                    ],
                 },
                 "upscale": result.get("upscale"),
             },

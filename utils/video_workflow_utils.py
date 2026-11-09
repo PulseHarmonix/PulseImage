@@ -457,6 +457,47 @@ def modify_fasth3_image_to_video_workflow(
     return wf
 
 
+def load_base_fasth3_image_audio_guide_workflow() -> dict:
+    """Load FastH3 I2V and add an audio guide anchored at frame 0."""
+    wf = load_base_fasth3_image_to_video_workflow()
+    wf["900"] = {
+        "inputs": {"audio": ""},
+        "class_type": "LoadAudio",
+        "_meta": {"title": "Load Audio"},
+    }
+    wf["901"] = {
+        "inputs": {
+            "positive": ["105:104", 0],
+            "latent": ["105:104", 1],
+            "frame_idx": 0,
+            "audio_vae": ["105:24", 0],
+            "audio": ["900", 0],
+        },
+        "class_type": "MiniMaxH3AddGuide",
+        "_meta": {"title": "Add Guide for MiniMax H3"},
+    }
+    if "105:16" in wf:
+        wf["105:16"]["inputs"]["conditioning"] = ["901", 0]
+    return wf
+
+
+def modify_fasth3_image_audio_guide_workflow(
+    workflow: dict,
+    prompt: str,
+    width: int,
+    height: int,
+    duration: float,
+    image_filename: str,
+    audio_filename: str,
+) -> dict:
+    """Inject first-frame image and audio guide into the FastH3 workflow."""
+    wf = modify_fasth3_image_to_video_workflow(
+        workflow, prompt, width, height, duration, image_filename
+    )
+    wf["900"]["inputs"]["audio"] = audio_filename
+    return wf
+
+
 def load_base_fasth3_reference_image_audio_to_video_workflow() -> dict:
     """Load the base FastH3 OmniRef image+audio-to-video workflow."""
     with open(FASTH3_REF_PATH, "r", encoding="utf-8") as f:
@@ -540,26 +581,69 @@ def parse_h3_script(text: str):
     return scene, dialogue
 
 
-def build_h3_multi_ref_prompt(user_prompt: str, image_count: int, audio_count: int) -> str:
+_H3_PICTURE_REF_RE = re.compile(r"(?i)(?<![\w<])(?:image|picture)\s*#?\s*(\d+)\b")
+
+
+def _normalize_h3_picture_refs(text: str) -> str:
+    """Rewrite textual image references (image 1, picture #2) to <Picture N>."""
+    return _H3_PICTURE_REF_RE.sub(lambda m: f"<Picture {m.group(1)}>", text or "")
+
+
+def _h3_subject_phrase(role: str, label: str, picture: int) -> str:
+    pic = f"<Picture {picture}>"
+    role = (role or "").strip().lower()
+    label = (label or "").strip()
+    if role == "background":
+        return f"the {label} shown in {pic}" if label else f"the background stage shown in {pic}"
+    if role == "prop":
+        return f"the {label} shown in {pic}" if label else f"the prop shown in {pic}"
+    if role == "reference":
+        return f"the {label} shown in {pic}" if label else f"the reference shown in {pic}"
+    if label:
+        return f"the {label} shown in {pic}"
+    return f"the subject shown in {pic}"
+
+
+def build_h3_multi_ref_prompt(
+    user_prompt: str,
+    image_count: int,
+    audio_count: int,
+    image_roles: list | None = None,
+    image_labels: list | None = None,
+    audio_mode: str = "voice",
+) -> str:
     """Build a structured H3 reference prompt for multiple images/audio refs.
 
-    Images map to <Picture i> and <Subject i>; audio maps to <Audio j> and is
-    bound to the same-numbered subject as its voice-timbre reference.
+    Images map to <Picture i> and <Subject i>. In ``voice`` mode audio maps to
+    <Audio j> and is bound to the same-numbered subject as its voice-timbre
+    reference. In ``music`` mode audio is the song/performance track that drives
+    movement and lip-sync instead of a subject's timbre.
     Lines written as ``S1: ...`` become ``<d>[English] ...</d>`` dialogue.
+    Optional roles/labels make subject definitions role-aware.
     """
     p = (user_prompt or "").strip()
     if "subject_definitions:" in p.lower():
         return p
 
+    audio_mode = (audio_mode or "voice").strip().lower()
+    is_music = audio_mode == "music"
+
     image_count = max(0, min(int(image_count or 0), 6))
     audio_count = max(0, min(int(audio_count or 0), 3))
+    roles = list(image_roles or [])
+    labels = list(image_labels or [])
     scene, dialogue = parse_h3_script(p)
+    scene = _normalize_h3_picture_refs(scene)
 
     lines = ["subject_definitions:"]
     for i in range(1, image_count + 1):
-        lines.append(f"<Subject {i}> is the subject shown in <Picture {i}>.")
+        role = roles[i - 1] if i - 1 < len(roles) else ""
+        label = labels[i - 1] if i - 1 < len(labels) else ""
+        lines.append(f"<Subject {i}> is {_h3_subject_phrase(role, label, i)}.")
     for j in range(1, audio_count + 1):
-        if j <= image_count:
+        if is_music:
+            lines.append(f"<Audio {j}> is the song/performance audio reference.")
+        elif j <= image_count:
             lines.append(f"<Audio {j}> is the voice-timbre reference for <Subject {j}> (S{j}).")
         else:
             lines.append(f"<Audio {j}> is a standalone reference audio.")
@@ -570,9 +654,13 @@ def build_h3_multi_ref_prompt(user_prompt: str, image_count: int, audio_count: i
 
     lines.append("summary:")
     if audio_count and image_count:
+        audio_desc = (
+            "song/performance audio references" if is_music
+            else "voice-timbre references"
+        )
         lines.append(
             f"[reference generation + audio reference] The target video features {subj_tags}, "
-            f"with {audio_tags} used as voice-timbre references."
+            f"with {audio_tags} used as {audio_desc}."
         )
     elif audio_count:
         lines.append(f"[audio reference] The target video uses {audio_tags} as audio references.")
@@ -588,7 +676,12 @@ def build_h3_multi_ref_prompt(user_prompt: str, image_count: int, audio_count: i
             f"<Subject {i}> (appears in [Shot 1]): fully_preserved - the subject from <Picture {i}> is retained."
         )
     for j in range(1, audio_count + 1):
-        if j <= image_count:
+        if is_music:
+            lines.append(
+                f"<Audio {j}>: reference - the performance, movement and lip-sync should follow "
+                f"<Audio {j}> (song audio) without copying the original signal."
+            )
+        elif j <= image_count:
             lines.append(
                 f"<Audio {j}>: reference - <Subject {j}> (S{j}) follows <Audio {j}>'s voice timbre "
                 f"without copying the original signal."
@@ -602,6 +695,7 @@ def build_h3_multi_ref_prompt(user_prompt: str, image_count: int, audio_count: i
     for speaker, text in dialogue:
         if speaker < 1:
             continue
+        text = _normalize_h3_picture_refs(text)
         if image_count and speaker <= image_count:
             lines.append(f"<Subject {speaker}> (S{speaker}) says, <d>[English] {text}</d>")
         else:
@@ -659,6 +753,69 @@ def modify_relayvsr_workflow(
     return wf
 
 
+def _add_fasth3_multi_ref_guide_nodes(wf: dict) -> None:
+    """Add a frame-0 image guide to a multi-ref graph if it is missing."""
+    if "901" not in wf:
+        wf["900"] = {
+            "inputs": {"image": ""},
+            "class_type": "LoadImage",
+            "_meta": {"title": "First Frame"},
+        }
+        wf["901"] = {
+            "inputs": {
+                "positive": ["136", 0],
+                "latent": ["136", 1],
+                "frame_idx": 0,
+                "vae": ["119", 0],
+                "image": ["900", 0],
+            },
+            "class_type": "MiniMaxH3AddGuide",
+            "_meta": {"title": "Add Guide for MiniMax H3"},
+        }
+    if "126" in wf:
+        wf["126"]["inputs"]["conditioning"] = ["901", 0]
+
+
+def load_base_fasth3_multi_ref_guide_workflow() -> dict:
+    """Load the multil-ref workflow and add a frame-0 image guide.
+
+    The full multi-reference images and reference audio stay intact; the guide
+    only anchors the extracted first frame.
+    """
+    wf = load_base_fasth3_multi_ref_workflow()
+    _add_fasth3_multi_ref_guide_nodes(wf)
+    return wf
+
+
+def modify_fasth3_multi_ref_guide_workflow(
+    workflow: dict,
+    prompt: str,
+    width: int,
+    height: int,
+    duration: float,
+    image_filenames: list,
+    audio_filenames: list,
+    first_frame_filename: str,
+    image_roles: list | None = None,
+    image_labels: list | None = None,
+    audio_mode: str = "voice",
+) -> dict:
+    """Inject a first-frame guide plus multi-ref images/audio into the workflow."""
+    return modify_fasth3_multi_ref_workflow(
+        workflow,
+        prompt,
+        width,
+        height,
+        duration,
+        image_filenames,
+        audio_filenames,
+        image_roles=image_roles,
+        image_labels=image_labels,
+        first_frame_filename=first_frame_filename,
+        audio_mode=audio_mode,
+    )
+
+
 def modify_fasth3_multi_ref_workflow(
     workflow: dict,
     prompt: str,
@@ -667,6 +824,10 @@ def modify_fasth3_multi_ref_workflow(
     duration: float,
     image_filenames: list,
     audio_filenames: list,
+    image_roles: list | None = None,
+    image_labels: list | None = None,
+    first_frame_filename: str | None = None,
+    audio_mode: str = "voice",
 ) -> dict:
     """Inject up to 6 reference images + 3 reference audios into the multi-ref workflow.
 
@@ -714,8 +875,19 @@ def modify_fasth3_multi_ref_workflow(
                 node["inputs"].pop(key, None)
                 wf.pop(aud_nodes[j], None)
 
+    if first_frame_filename:
+        _add_fasth3_multi_ref_guide_nodes(wf)
+        wf["900"]["inputs"]["image"] = first_frame_filename
+
     if "138" in wf:  # Input Text (Prompt)
-        wf["138"]["inputs"]["value"] = build_h3_multi_ref_prompt(prompt, len(images), len(audios))
+        wf["138"]["inputs"]["value"] = build_h3_multi_ref_prompt(
+            prompt,
+            len(images),
+            len(audios),
+            image_roles=image_roles,
+            image_labels=image_labels,
+            audio_mode=audio_mode,
+        )
     if "132" in wf:  # Float (Duration)
         wf["132"]["inputs"]["value"] = float(dur)
     if "129" in wf:  # RandomNoise

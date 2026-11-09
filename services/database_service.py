@@ -52,6 +52,7 @@ def init_db() -> None:
             slot_number INTEGER NOT NULL,
             name TEXT DEFAULT '',
             image TEXT DEFAULT '{}',
+            images TEXT DEFAULT '[]',
             created TEXT DEFAULT (datetime('now')),
             last_updated TEXT DEFAULT (datetime('now'))
         );
@@ -82,5 +83,8 @@ def init_db() -> None:
     seg_cols = [r[1] for r in conn.execute("PRAGMA table_info(music_segments)").fetchall()]
     if "follow_on" not in seg_cols:
         conn.execute("ALTER TABLE music_segments ADD COLUMN follow_on INTEGER DEFAULT 0")
+    slot_cols = [r[1] for r in conn.execute("PRAGMA table_info(music_slots)").fetchall()]
+    if "images" not in slot_cols:
+        conn.execute("ALTER TABLE music_slots ADD COLUMN images TEXT DEFAULT '[]'")
     conn.commit()
     conn.close()
