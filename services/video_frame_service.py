@@ -290,6 +290,82 @@ def extract_full_frame(video_filename: str, time_seconds: float) -> dict:
     return {"filename": out_filename, "width": width, "height": height}
 
 
+def extract_video_clip(
+    video_filename: str,
+    start_seconds: float,
+    duration_seconds: float,
+    fps: float = 24.0,
+) -> dict:
+    """Extract a short, normalized clip from a video into the ``videos/`` folder.
+
+    Used as a motion-continuity reference for FastH3 follow-on segments. The
+    clip is normalized to 24fps H.264/yuv420p with audio stripped and written
+    under a unique temporary filename.
+    """
+    src = _video_path(video_filename)
+    if not os.path.isfile(src):
+        raise VideoFrameError(f"Video not found: {video_filename}")
+
+    ffmpeg = _find_binary("ffmpeg")
+    if not ffmpeg:
+        raise VideoFrameError("ffmpeg not found on PATH")
+
+    try:
+        start = max(0.0, float(start_seconds))
+    except (TypeError, ValueError):
+        start = 0.0
+    try:
+        dur = max(0.0, float(duration_seconds))
+    except (TypeError, ValueError):
+        dur = 0.0
+    if dur <= 0:
+        raise VideoFrameError("Clip duration must be greater than zero")
+
+    out_fps = 24.0
+    os.makedirs(VIDEOS_FOLDER, exist_ok=True)
+    out_filename = f"follow_on_{uuid.uuid4().hex}.mp4"
+    out_path = os.path.join(VIDEOS_FOLDER, out_filename)
+
+    cmd = [
+        ffmpeg, "-y",
+        "-ss", f"{start:.3f}",
+        "-t", f"{dur:.3f}",
+        "-i", src,
+        "-an",
+        "-vf", f"fps={out_fps:g}",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        try:
+            if os.path.isfile(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        raise VideoFrameError(f"ffmpeg clip extraction failed: {e}")
+
+    if result.returncode != 0 or not os.path.isfile(out_path):
+        try:
+            if os.path.isfile(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        raise VideoFrameError(
+            f"ffmpeg clip extraction failed: {(result.stderr or '')[-300:]}"
+        )
+
+    return {
+        "filename": out_filename,
+        "duration": dur,
+        "fps": out_fps,
+        "frames": int(round(dur * out_fps)),
+    }
+
+
 def clear_frame_cache(asset_id: str) -> None:
     """Remove a video's cached frame thumbnails (best effort)."""
     try:

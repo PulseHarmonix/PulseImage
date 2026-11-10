@@ -611,6 +611,7 @@ def build_h3_multi_ref_prompt(
     image_roles: list | None = None,
     image_labels: list | None = None,
     audio_mode: str = "voice",
+    video_count: int = 0,
 ) -> str:
     """Build a structured H3 reference prompt for multiple images/audio refs.
 
@@ -619,7 +620,8 @@ def build_h3_multi_ref_prompt(
     reference. In ``music`` mode audio is the song/performance track that drives
     movement and lip-sync instead of a subject's timbre.
     Lines written as ``S1: ...`` become ``<d>[English] ...</d>`` dialogue.
-    Optional roles/labels make subject definitions role-aware.
+    Optional roles/labels make subject definitions role-aware. When
+    ``video_count`` is set a <Video 1> motion-continuity reference is added.
     """
     p = (user_prompt or "").strip()
     if "subject_definitions:" in p.lower():
@@ -630,6 +632,7 @@ def build_h3_multi_ref_prompt(
 
     image_count = max(0, min(int(image_count or 0), 6))
     audio_count = max(0, min(int(audio_count or 0), 3))
+    video_count = max(0, min(int(video_count or 0), 1))
     roles = list(image_roles or [])
     labels = list(image_labels or [])
     scene, dialogue = parse_h3_script(p)
@@ -647,10 +650,16 @@ def build_h3_multi_ref_prompt(
             lines.append(f"<Audio {j}> is the voice-timbre reference for <Subject {j}> (S{j}).")
         else:
             lines.append(f"<Audio {j}> is a standalone reference audio.")
+    for k in range(1, video_count + 1):
+        lines.append(
+            f"<Video {k}> is the immediately preceding clip / motion-continuity reference. "
+            f"The new target video starts after <Video {k}>."
+        )
     lines.append("")
 
     subj_tags = ", ".join(f"<Subject {i}> (S{i})" for i in range(1, image_count + 1))
     audio_tags = ", ".join(f"<Audio {j}>" for j in range(1, audio_count + 1))
+    video_tags = ", ".join(f"<Video {k}>" for k in range(1, video_count + 1))
 
     lines.append("summary:")
     if audio_count and image_count:
@@ -668,6 +677,11 @@ def build_h3_multi_ref_prompt(
         lines.append(f"[reference generation] The target video features {subj_tags} from the attached reference images.")
     else:
         lines.append("[reference generation] The target video is generated from the prompt.")
+    if video_count:
+        lines.append(
+            f"[continuity] {video_tags} is the immediately preceding clip used as a "
+            f"motion-continuity reference; the target video starts after it."
+        )
     lines.append("")
 
     lines.append("retention_analysis:")
@@ -688,10 +702,22 @@ def build_h3_multi_ref_prompt(
             )
         else:
             lines.append(f"<Audio {j}>: reference - <Audio {j}> is used as an audio reference.")
+    for k in range(1, video_count + 1):
+        lines.append(
+            f"<Video {k}>: reference - motion, camera movement and character blocking are preserved; "
+            f"the first generated frame must match the final frame of <Video {k}>."
+        )
     lines.append("")
 
     lines.append("detailed_description:")
-    lines.append("[Shot 1] " + (scene or "A cinematic shot."))
+    shot1_prefix = ""
+    if video_count:
+        shot1_prefix = (
+            "Continue directly from <Video 1> without a new shot cut: preserve motion, "
+            "camera movement and character blocking, and the first generated frame must "
+            "match the final frame of <Video 1>. "
+        )
+    lines.append("[Shot 1] " + shot1_prefix + (scene or "A cinematic shot."))
     for speaker, text in dialogue:
         if speaker < 1:
             continue
@@ -799,6 +825,8 @@ def modify_fasth3_multi_ref_guide_workflow(
     image_roles: list | None = None,
     image_labels: list | None = None,
     audio_mode: str = "voice",
+    ref_video_filename: str | None = None,
+    ref_image_size: str = "max",
 ) -> dict:
     """Inject a first-frame guide plus multi-ref images/audio into the workflow."""
     return modify_fasth3_multi_ref_workflow(
@@ -813,6 +841,8 @@ def modify_fasth3_multi_ref_guide_workflow(
         image_labels=image_labels,
         first_frame_filename=first_frame_filename,
         audio_mode=audio_mode,
+        ref_video_filename=ref_video_filename,
+        ref_image_size=ref_image_size,
     )
 
 
@@ -828,6 +858,8 @@ def modify_fasth3_multi_ref_workflow(
     image_labels: list | None = None,
     first_frame_filename: str | None = None,
     audio_mode: str = "voice",
+    ref_video_filename: str | None = None,
+    ref_image_size: str = "max",
 ) -> dict:
     """Inject up to 6 reference images + 3 reference audios into the multi-ref workflow.
 
@@ -845,7 +877,7 @@ def modify_fasth3_multi_ref_workflow(
     if node:
         node["inputs"]["width"] = int(width)
         node["inputs"]["height"] = int(height)
-        node["inputs"]["ref_image_size"] = "max"  # best facial/hair identity fidelity
+        node["inputs"]["ref_image_size"] = "match" if ref_image_size == "match" else "max"
 
         for i in range(6):
             key = f"ref_images.ref_image_{i}"
@@ -879,6 +911,25 @@ def modify_fasth3_multi_ref_workflow(
         _add_fasth3_multi_ref_guide_nodes(wf)
         wf["900"]["inputs"]["image"] = first_frame_filename
 
+    video_count = 1 if ref_video_filename else 0
+    if ref_video_filename and node:
+        wf["903"] = {
+            "class_type": "LoadVideo",
+            "inputs": {"file": ref_video_filename},
+            "_meta": {"title": "Reference Video"},
+        }
+        wf["904"] = {
+            "class_type": "GetVideoComponents",
+            "inputs": {"video": ["903", 0]},
+            "_meta": {"title": "Reference Video Components"},
+        }
+        node["inputs"]["ref_videos.ref_video_0"] = ["904", 0]
+    else:
+        if node:
+            node["inputs"].pop("ref_videos.ref_video_0", None)
+        wf.pop("903", None)
+        wf.pop("904", None)
+
     if "138" in wf:  # Input Text (Prompt)
         wf["138"]["inputs"]["value"] = build_h3_multi_ref_prompt(
             prompt,
@@ -887,6 +938,7 @@ def modify_fasth3_multi_ref_workflow(
             image_roles=image_roles,
             image_labels=image_labels,
             audio_mode=audio_mode,
+            video_count=video_count,
         )
     if "132" in wf:  # Float (Duration)
         wf["132"]["inputs"]["value"] = float(dur)

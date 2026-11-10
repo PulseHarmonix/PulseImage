@@ -117,6 +117,19 @@ async def wait_for_comfy_queue_idle(
         await asyncio.sleep(settle_seconds)
 
 
+async def interrupt_comfy_prompt(prompt_id: str | None = None) -> None:
+    """Best-effort request for ComfyUI to cancel the current/pending prompt.
+
+    Never raises: a failed interrupt must not break the caller's error path.
+    """
+    try:
+        payload = {"prompt_id": prompt_id} if prompt_id else {}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(f"{get_comfyui_url()}/interrupt", json=payload)
+    except Exception as e:
+        print(f"⚠️ Failed to interrupt ComfyUI prompt {prompt_id or '(current)'}: {e}")
+
+
 async def fetch_loras_from_comfy() -> list[str]:
     """Query ComfyUI for available LoRAs.
     Prefers the direct /models/loras endpoint (user-confirmed working; lists files in loras folder + subdirs).
@@ -691,6 +704,39 @@ async def upload_audio_to_comfy(local_filename: str) -> str | None:
         return None
 
 
+async def upload_video_to_comfy(local_filename: str) -> str | None:
+    """
+    Upload a local video (from our videos/ folder) to ComfyUI's input folder.
+    Uses the /upload/image endpoint (Comfy accepts non-images for input/ and
+    LoadVideo works with the returned name). Mirrors the RelayVSR helper.
+    """
+    try:
+        full_path = os.path.join(VIDEOS_FOLDER, local_filename)
+        if not os.path.isfile(full_path):
+            print(f"[VIDEO REF] Source video not found locally: {full_path}")
+            return None
+
+        print(f"[VIDEO REF] Uploading source video to ComfyUI: {local_filename}")
+        with open(full_path, "rb") as f:
+            files = {"image": (local_filename, f, "video/mp4")}
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    f"{get_comfyui_url()}/upload/image",
+                    files=files,
+                )
+                if response.status_code == 200:
+                    data = response.json() or {}
+                    comfy_name = data.get("name")
+                    if comfy_name:
+                        print(f"[VIDEO REF] Uploaded as Comfy input: {comfy_name}")
+                        return comfy_name
+                print(f"[VIDEO REF] Upload failed {response.status_code}: {response.text[:300]}")
+                return None
+    except Exception as e:
+        print(f"[VIDEO REF] Upload exception: {e}")
+        return None
+
+
 def resolve_ltx_version(ltx_version: str | None = None) -> str:
     """Return the LTX version to use ('2.3' or '2.5'), falling back to settings."""
     v = ltx_version
@@ -1114,14 +1160,19 @@ async def generate_fasth3_multi_ref_video(
     image_labels: list | None = None,
     first_frame_filename: str | None = None,
     audio_mode: str = "voice",
+    ref_video_filename: str | None = None,
+    ref_image_size: str = "max",
 ) -> dict:
     """Generate a FastH3 video from multiple reference images and audio clips.
 
     Uses the dedicated multi-ref workflow so the single-ref OmniRef workflow
     (used by Music Video) is unaffected. When ``first_frame_filename`` is set a
-    frame-0 image guide is added on top of the same multi-reference graph.
+    frame-0 image guide is added on top of the same multi-reference graph. When
+    ``ref_video_filename`` is set the clip is used as a motion-continuity
+    reference video.
     """
     print("\n>>> [FASTH3 MULTI-REF] generate_fasth3_multi_ref_video started")
+    prompt_id = None
     try:
         image_names = []
         for fn in (ref_images or [])[:6]:
@@ -1149,6 +1200,15 @@ async def generate_fasth3_multi_ref_video(
                     "error": f"Failed to upload first-frame image: {first_frame_filename}",
                 }
 
+        comfy_ref_video_name = None
+        if ref_video_filename:
+            comfy_ref_video_name = await upload_video_to_comfy(ref_video_filename)
+            if not comfy_ref_video_name:
+                return {
+                    "success": False,
+                    "error": f"Failed to upload reference video: {ref_video_filename}",
+                }
+
         width, height = get_video_dimensions(resolution, aspect_ratio)
         if comfy_first_frame_name:
             base_workflow = load_base_fasth3_multi_ref_guide_workflow()
@@ -1164,6 +1224,8 @@ async def generate_fasth3_multi_ref_video(
                 image_roles=image_roles,
                 image_labels=image_labels,
                 audio_mode=audio_mode,
+                ref_video_filename=comfy_ref_video_name,
+                ref_image_size=ref_image_size,
             )
         else:
             base_workflow = load_base_fasth3_multi_ref_workflow()
@@ -1178,6 +1240,8 @@ async def generate_fasth3_multi_ref_video(
                 image_roles=image_roles,
                 image_labels=image_labels,
                 audio_mode=audio_mode,
+                ref_video_filename=comfy_ref_video_name,
+                ref_image_size=ref_image_size,
             )
         save_node = "92"
 
@@ -1218,6 +1282,8 @@ async def generate_fasth3_multi_ref_video(
                         print(f"[FASTH3 MULTI-REF] Polling warning: {e}")
 
             if not video_info:
+                print("[FASTH3 MULTI-REF] ❌ No video file found after polling; interrupting ComfyUI job")
+                await interrupt_comfy_prompt(prompt_id)
                 return {"success": False, "error": "No video output found"}
 
             local_filename = await download_and_save_video(
@@ -1238,6 +1304,8 @@ async def generate_fasth3_multi_ref_video(
         print(f"[FASTH3 MULTI-REF] Critical error: {e}")
         import traceback
         traceback.print_exc()
+        if prompt_id:
+            await interrupt_comfy_prompt(prompt_id)
         return {"success": False, "error": str(e)}
 
 

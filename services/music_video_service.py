@@ -217,6 +217,7 @@ def _slot_dict(row) -> dict:
 def _segment_dict(row) -> dict:
     d = dict(row)
     d["follow_on"] = bool(d.get("follow_on"))
+    d["follow_on_video"] = bool(d.get("follow_on_video"))
     return d
 
 
@@ -637,6 +638,9 @@ def update_segment(segment_id: str, data: dict) -> Optional[dict]:
     if "follow_on" in data:
         fields.append("follow_on = ?")
         values.append(1 if data.get("follow_on") else 0)
+    if "follow_on_video" in data:
+        fields.append("follow_on_video = ?")
+        values.append(1 if data.get("follow_on_video") else 0)
 
     if fields:
         fields.append("last_updated = ?")

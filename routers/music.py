@@ -59,6 +59,7 @@ from services.comfy_progress import set_progress_job
 from services.video_upscale_service import maybe_upscale_video_result
 from services.video_frame_service import (
     extract_full_frame,
+    extract_video_clip,
     probe_video,
     VideoFrameError,
 )
@@ -340,6 +341,24 @@ async def generate_music_segment(segment_id: str, request: Request):
         return {"success": False, "error": "Prompt is required for this segment"}
 
     follow_on = bool(segment.get("follow_on"))
+    follow_on_video = bool(segment.get("follow_on_video")) and follow_on
+    follow_on_video_fallback = None
+    temp_video_filename = None
+    clip_start = 0.0
+
+    video_model = "ltx"
+    ltx_version = "2.3"
+    if project_model == "ltx25":
+        ltx_version = "2.5"
+    elif project_model == "fasth3":
+        video_model = "fasth3"
+    elif project_model == "grok":
+        video_model = "grok"
+
+    if follow_on_video and video_model != "fasth3":
+        err = "Video follow-on requires the FastH3 model."
+        set_segment_status(segment_id, "error", err)
+        return {"success": False, "error": err}
 
     reference_images = _slot_reference_images(slot)
     previous_segment = None
@@ -375,6 +394,27 @@ async def generate_music_segment(segment_id: str, request: Request):
         except VideoFrameError as e:
             return {"success": False, "error": str(e)}
         temp_frame_filename = frame.get("filename")
+
+        if follow_on_video:
+            clip_start = max(0.0, frame_offset - 2.0)
+            clip_duration = frame_offset - clip_start
+            if clip_duration < 2.0:
+                follow_on_video = False
+                follow_on_video_fallback = "clip_too_short"
+            else:
+                try:
+                    clip = extract_video_clip(
+                        previous_video_filename, clip_start, 2.0
+                    )
+                except VideoFrameError as e:
+                    if temp_frame_filename:
+                        try:
+                            os.remove(os.path.join("images", temp_frame_filename))
+                        except OSError:
+                            pass
+                    return {"success": False, "error": str(e)}
+                temp_video_filename = clip.get("filename")
+
         frame_image = {
             "asset_id": "",
             "filename": temp_frame_filename,
@@ -413,15 +453,6 @@ async def generate_music_segment(segment_id: str, request: Request):
     aspect_ratio = settings.get("aspect_ratio") or "3:2"
     duration = float(end) - float(start)
 
-    video_model = "ltx"
-    ltx_version = "2.3"
-    if project_model == "ltx25":
-        ltx_version = "2.5"
-    elif project_model == "fasth3":
-        video_model = "fasth3"
-    elif project_model == "grok":
-        video_model = "grok"
-
     try:
         if video_model != "fasth3" and len(image_filenames) > 1:
             if follow_on:
@@ -436,7 +467,9 @@ async def generate_music_segment(segment_id: str, request: Request):
 
         set_segment_status(segment_id, "generating")
 
-        use_multi_ref = video_model == "fasth3" and len(image_filenames) > 1
+        use_multi_ref = video_model == "fasth3" and (
+            len(image_filenames) > 1 or follow_on_video
+        )
         follow_on_i2v = follow_on and video_model == "fasth3" and not use_multi_ref
 
         trimmed_filename = None
@@ -462,6 +495,8 @@ async def generate_music_segment(segment_id: str, request: Request):
                     image_labels=image_labels,
                     first_frame_filename=temp_frame_filename if follow_on else None,
                     audio_mode="music",
+                    ref_video_filename=temp_video_filename if follow_on_video else None,
+                    ref_image_size="match" if follow_on_video else "max",
                 )
             elif follow_on_i2v:
                 result = await generate_single_image_to_video(
@@ -537,7 +572,11 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "video_model": video_model,
                     "ltx_version": ltx_version if video_model == "ltx" else None,
                     "fasth3_mode": (
-                        ("multi_ref_guide" if follow_on else "multi_ref")
+                        (
+                            "multi_ref_video_guide"
+                            if follow_on_video
+                            else ("multi_ref_guide" if follow_on else "multi_ref")
+                        )
                         if use_multi_ref
                         else (
                             "i2v_audio_guide"
@@ -549,6 +588,7 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "aspect_ratio": aspect_ratio,
                     "duration": out_duration,
                     "original_prompt": prompt,
+                    "reference_image_size": "match" if follow_on_video else "max",
                     "video_upscale": "relayvsr_x2"
                     if (result.get("upscale") or {}).get("status") == "done"
                     else "off",
@@ -571,6 +611,11 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "follow_on_time": round(frame_offset, 3) if follow_on else None,
                     "follow_on_background_replaced": follow_on_background_replaced,
                     "follow_on_first_frame": bool(follow_on and video_model == "fasth3"),
+                    "follow_on_video": follow_on_video,
+                    "follow_on_video_start": round(clip_start, 3) if follow_on_video else None,
+                    "follow_on_video_end": round(frame_offset, 3) if follow_on_video else None,
+                    "follow_on_video_frames": 48 if follow_on_video else 0,
+                    "follow_on_video_fallback": follow_on_video_fallback,
                     "reference_images": [
                         {
                             "filename": img["filename"],
@@ -600,5 +645,10 @@ async def generate_music_segment(segment_id: str, request: Request):
         if temp_frame_filename:
             try:
                 os.remove(os.path.join("images", temp_frame_filename))
+            except OSError:
+                pass
+        if temp_video_filename:
+            try:
+                os.remove(os.path.join("videos", temp_video_filename))
             except OSError:
                 pass

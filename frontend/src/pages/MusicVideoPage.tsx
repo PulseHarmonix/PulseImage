@@ -61,6 +61,7 @@ interface Segment {
   end_time: number
   prompt: string
   follow_on?: boolean
+  follow_on_video?: boolean
   status?: string
   video_filename?: string
   video_asset_id?: string
@@ -392,6 +393,7 @@ function SegmentRow({
   selected,
   isFirst,
   videoName,
+  videoModel,
   playingAudio,
   audioAvailable,
   onSelect,
@@ -408,15 +410,20 @@ function SegmentRow({
   selected: boolean
   isFirst: boolean
   videoName?: string
+  videoModel: string
   playingAudio: boolean
   audioAvailable: boolean
   onSelect: () => void
   onToggleAudio: () => void
   onDraft: (
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+    updates: Partial<
+      Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on' | 'follow_on_video'>
+    >,
   ) => void
   onSave: (
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+    updates: Partial<
+      Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on' | 'follow_on_video'>
+    >,
   ) => void
   onGenerate: () => void
   onDelete: () => void
@@ -554,11 +561,11 @@ function SegmentRow({
               'flex items-center gap-2 text-[11px] text-text-2',
               isFirst && 'cursor-not-allowed opacity-60',
             )}
-              title={
-                isFirst
-                  ? 'The first segment cannot follow on from another segment'
-                  : "Use the previous segment's frame as the first frame and this segment's song audio to drive the motion"
-              }
+            title={
+              isFirst
+                ? 'The first segment cannot follow on from another segment'
+                : "Use the previous segment's final frame as this segment's exact first frame, driven by the song audio"
+            }
           >
             <input
               type="checkbox"
@@ -566,12 +573,46 @@ function SegmentRow({
               disabled={isFirst}
               onChange={(event) => {
                 const checked = event.target.checked
-                onDraft({ follow_on: checked })
-                onSave({ follow_on: checked })
+                const updates = checked
+                  ? { follow_on: true }
+                  : { follow_on: false, follow_on_video: false }
+                onDraft(updates)
+                onSave(updates)
               }}
               className="size-3.5 accent-lime"
             />
-            Follow on
+            Follow on with last frame
+          </label>
+
+          <label
+            onClick={(event) => event.stopPropagation()}
+            className={cn(
+              'flex items-center gap-2 text-[11px] text-text-2',
+              (isFirst || !segment.follow_on || videoModel !== 'fasth3') &&
+                'cursor-not-allowed opacity-60',
+            )}
+            title={
+              isFirst
+                ? 'The first segment cannot use a video reference'
+                : !segment.follow_on
+                  ? 'Enable "Follow on with last frame" first'
+                  : videoModel !== 'fasth3'
+                    ? 'Video follow-on requires FastH3'
+                    : "Add the previous 2s as motion continuity context while the previous final frame remains this segment's exact first frame — no repeated frames"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(segment.follow_on_video)}
+              disabled={isFirst || !segment.follow_on || videoModel !== 'fasth3'}
+              onChange={(event) => {
+                const checked = event.target.checked
+                onDraft({ follow_on_video: checked })
+                onSave({ follow_on_video: checked })
+              }}
+              className="size-3.5 accent-lime"
+            />
+            Use previous 2s as video reference
           </label>
 
           {generating ? <Progress value={progress} /> : null}
@@ -998,7 +1039,9 @@ export function MusicVideoPage() {
 
   const previewSegment = (
     segment: Segment,
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+    updates: Partial<
+      Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on' | 'follow_on_video'>
+    >,
   ) => {
     if (!project) return
     queryClient.setQueryData<Project>(['music', 'project', project.id], (current) => {
@@ -1021,7 +1064,9 @@ export function MusicVideoPage() {
 
   const updateSegment = async (
     segment: Segment,
-    updates: Partial<Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on'>>,
+    updates: Partial<
+      Pick<Segment, 'start_time' | 'end_time' | 'prompt' | 'follow_on' | 'follow_on_video'>
+    >,
   ) => {
     try {
       await apiPost(`/music/segments/${segment.id}`, updates)
@@ -1141,6 +1186,12 @@ export function MusicVideoPage() {
     if (!segment.follow_on && references.length === 0) {
       if (!options?.silent) {
         toast({ title: 'Add a reference image for this character first', tone: 'warning' })
+      }
+      return false
+    }
+    if (segment.follow_on_video && projectModel !== 'fasth3') {
+      if (!options?.silent) {
+        toast({ title: 'Video follow-on requires FastH3', tone: 'warning' })
       }
       return false
     }
@@ -2284,6 +2335,7 @@ export function MusicVideoPage() {
                         selected={selectedSegmentId === segment.id}
                         isFirst={index === 0}
                         videoName={videoNameForSegment(segment)}
+                        videoModel={projectModel}
                         playingAudio={playingSegmentId === segment.id}
                         audioAvailable={Boolean(project?.audio?.filename)}
                         onSelect={() => {
