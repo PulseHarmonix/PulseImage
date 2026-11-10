@@ -82,6 +82,8 @@ export function dispatchAttachAsset(asset: Asset): void {
 
 export function inferResolution(asset?: Asset | null): string {
   const long = Math.max(asset?.width || 0, asset?.height || 0)
+  if (long >= 3000) return '4K'
+  if (long >= 2000) return '1440p'
   if (long >= 1500) return '1080p'
   if (long >= 900) return '720p'
   if (long >= 400) return '480p'

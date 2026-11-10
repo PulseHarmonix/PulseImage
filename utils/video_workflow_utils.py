@@ -57,6 +57,8 @@ def get_video_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
         "480p": 720,
         "720p": 720,
         "1080p": 1080,
+        "1440p": 1440,
+        "4K": 2160,
     }
 
     base_height = height_map.get(resolution, 720)
@@ -81,9 +83,16 @@ def get_video_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
         width = base_height
         height = base_height
 
-    # Ensure dimensions are multiples of 64
-    width = max(512, (width // 64) * 64)
-    height = max(512, (height // 64) * 64)
+    if resolution in ("1440p", "4K"):
+        # High-res LTX modes require 32px alignment. Round up to the next
+        # multiple of 32 so requested targets such as 4K 3:2 (3264x2176) and
+        # 4K 16:9 (3840x2176) are produced exactly.
+        width = max(64, ((width + 31) // 32) * 32)
+        height = max(64, ((height + 31) // 32) * 32)
+    else:
+        # Ensure dimensions are multiples of 64
+        width = max(512, (width // 64) * 64)
+        height = max(512, (height // 64) * 64)
 
     return width, height
 

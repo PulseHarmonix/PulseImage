@@ -26,6 +26,7 @@ import { apiGet, apiUpload } from '../../lib/api'
 import { assetDisplayName, PULSE_ATTACH_EVENT, type AssetDragPayload } from '../../lib/assets'
 import { runGeneration } from '../../lib/generation'
 import { runSerializedGeneration } from '../../lib/generationQueue'
+import { BASE_VIDEO_RESOLUTIONS, LTX_VIDEO_RESOLUTIONS, videoResolutionsFor } from '../../lib/videoResolutions'
 import type { Attachment, PromptMode, PromptTab } from '../../types'
 import { cn, titleFromPrompt } from '../../lib/utils'
 import { mediaUrl } from '../../lib/api'
@@ -73,7 +74,6 @@ const videoModels = [
   { value: 'grok', label: 'Grok Imagine' },
 ]
 
-const resolutions = ['480p', '720p', '1080p']
 const aspects = ['16:9', '9:16', '1:1', '3:2', '2:3']
 const durations = [1, 6, 10, 15, 20, 30, 40, 50, 60]
 
@@ -316,6 +316,13 @@ export function PromptDock() {
   const isFastH3 = tab.mode === 'video' && tab.videoModel === 'fasth3'
   const isLtx = tab.mode === 'video' && tab.videoModel === 'ltx'
   const autoPromptEnabled = isFastH3 ? Boolean(tab.h3?.enabled) : isLtx ? Boolean(tab.ltx?.enabled) : false
+  const resolutionChoices = isLtx ? LTX_VIDEO_RESOLUTIONS : BASE_VIDEO_RESOLUTIONS
+
+  useEffect(() => {
+    if (!resolutionChoices.includes(tab.resolution)) {
+      updateActive({ resolution: '1080p' })
+    }
+  }, [resolutionChoices, tab.resolution, updateActive])
 
   useEffect(() => {
     if (!settings.data) return
@@ -353,11 +360,15 @@ export function PromptDock() {
   const effectiveUpscale = tab.upscale ?? settings.data?.video_upscale === 'relayvsr_x2'
 
   const setVideoSelection = (value: string) => {
+    const nextModel = value.startsWith('ltx-') ? 'ltx' : value
+    const resolutionPatch = videoResolutionsFor(nextModel).includes(tab.resolution)
+      ? {}
+      : { resolution: '1080p' }
     if (value.startsWith('ltx-')) {
-      updateActive({ videoModel: 'ltx', ltxVersion: value.slice(4) })
+      updateActive({ videoModel: 'ltx', ltxVersion: value.slice(4), ...resolutionPatch })
       void updateSettings({ video_model: 'ltx', ltx_version: value.slice(4) })
     } else {
-      updateActive({ videoModel: value })
+      updateActive({ videoModel: value, ...resolutionPatch })
       void updateSettings({ video_model: value })
     }
   }
@@ -818,7 +829,7 @@ export function PromptDock() {
                 value={tab.resolution}
                 onChange={(event) => updateActive({ resolution: event.target.value })}
               >
-                {resolutions.map((res) => (
+                {resolutionChoices.map((res) => (
                   <option key={res} value={res}>
                     {res}
                   </option>

@@ -6,6 +6,7 @@ import { useHistory, useRelayCapabilities, useSettings, queryKeys } from '../lib
 import { mediaUrl } from '../lib/api'
 import { assetDisplayName, toAttachment } from '../lib/assets'
 import { runGeneration } from '../lib/generation'
+import { BASE_VIDEO_RESOLUTIONS, videoResolutionsFor } from '../lib/videoResolutions'
 import { createPromptTab } from '../stores/prompt'
 import { useQueueStore } from '../stores/queue'
 import { useUiStore } from '../stores/ui'
@@ -29,7 +30,6 @@ const modelOptions: { value: MotionModelChoice; label: string }[] = [
 ]
 
 const durationOptions = [4, 6, 8, 10, 15, 20, 30, 40, 50, 60]
-const resolutionOptions = ['480p', '720p', '1080p']
 const aspectOptions = ['16:9', '9:16', '1:1', '3:2', '2:3']
 const galleryGroups: MotionPreset['group'][] = ['Camera', 'Dynamic']
 
@@ -101,9 +101,16 @@ export function MotionPage() {
   }, [modelMode, settings.data?.video_model, settings.data?.ltx_version])
 
   const isFastH3 = resolved.videoModel === 'fasth3'
+  const resolutionOptions = useMemo(() => videoResolutionsFor(resolved.videoModel), [resolved.videoModel])
   const effectiveDuration = isFastH3 ? Math.min(duration, 15) : duration
   const effectiveUpscale = upscale ?? settings.data?.video_upscale === 'relayvsr_x2'
   const upscaleDisabled = relay.data?.relayvsr?.available === false
+
+  useEffect(() => {
+    if (!resolutionOptions.includes(resolution)) {
+      setResolution('1080p')
+    }
+  }, [resolutionOptions, resolution, setResolution])
 
   const activeJob = activeJobId ? jobs.find((job) => job.id === activeJobId) : undefined
   const latestResult = latestResultId
@@ -382,9 +389,13 @@ export function MotionPage() {
                 </span>
                 <Select
                   value={modelMode}
-                  onChange={(event) =>
-                    setModelMode(event.target.value as MotionModelChoice)
-                  }
+                  onChange={(event) => {
+                    const nextMode = event.target.value as MotionModelChoice
+                    setModelMode(nextMode)
+                    if (nextMode === 'fasth3' && !BASE_VIDEO_RESOLUTIONS.includes(resolution)) {
+                      setResolution('1080p')
+                    }
+                  }}
                 >
                   {modelOptions.map((option) => (
                     <option key={option.value} value={option.value}>

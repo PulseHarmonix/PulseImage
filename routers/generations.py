@@ -17,6 +17,8 @@ from services.comfy_service import (
     generate_fasth3_multi_ref_video,
     generate_fasth3_multi_ref_videos_with_progress,
     resolve_video_model,
+    free_comfyui_memory,
+    should_free_vram_for_video,
 )
 from services.generation_service import (
     save_generation,
@@ -82,6 +84,8 @@ async def generate(data: dict):
         )
         if reference_error:
             return {"success": False, "error": reference_error}
+        if should_free_vram_for_video(video_model, resolution):
+            await free_comfyui_memory()
         if resolved_model == "fasth3":
             # Image-only: optionally use the first-frame I2V workflow.
             if fasth3_mode == "i2v" and source_image and not modifier_audio and not ref_audios:
@@ -202,6 +206,8 @@ async def generate_stream(data: dict):
         )
         if reference_error:
             return JSONResponse({"success": False, "error": reference_error}, status_code=400)
+        if should_free_vram_for_video(video_model, resolution):
+            await free_comfyui_memory()
         if resolved_model == "fasth3":
             if fasth3_mode == "i2v" and source_image and not modifier_audio and not ref_audios:
                 return StreamingResponse(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, Heart, Image as ImageIcon, Layers3, Play, Star, User, Volume2, Zap } from 'lucide-react'
 import { useUiStore } from '../../stores/ui'
 import { mediaUrl } from '../../lib/api'
@@ -7,6 +7,57 @@ import { assetType, cn, formatDuration, inferAspect, parseMetadata, titleFromPro
 import { Badge } from '../ui'
 import type { Asset } from '../../types'
 
+function LazyThumbnail({
+  src,
+  alt,
+  priority = false,
+}: {
+  src: string
+  alt: string
+  priority?: boolean
+}) {
+  const imgRef = useRef<HTMLImageElement>(null)
+  const [visible, setVisible] = useState(priority || typeof IntersectionObserver === 'undefined')
+  const [broken, setBroken] = useState(false)
+
+  useEffect(() => {
+    if (priority || visible) return
+    const node = imgRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '300px 0px', threshold: 0.01 },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [priority, visible])
+
+  if (broken) {
+    return (
+      <div className="grid size-full place-items-center bg-[#0d0e0f] text-text-2">
+        <ImageIcon className="size-6" />
+      </div>
+    )
+  }
+
+  return (
+    <img
+      ref={imgRef}
+      src={visible ? src : undefined}
+      alt={alt}
+      loading={priority ? 'eager' : 'lazy'}
+      decoding="async"
+      onError={() => setBroken(true)}
+      className="size-full object-cover transition duration-300 group-hover:scale-[1.02]"
+    />
+  )
+}
+
 export function MediaCard({
   asset,
   compact = false,
@@ -14,6 +65,7 @@ export function MediaCard({
   highlighted = false,
   selectMode = false,
   stemCount,
+  priority = false,
   onToggleSelect,
 }: {
   asset: Asset
@@ -22,17 +74,14 @@ export function MediaCard({
   highlighted?: boolean
   selectMode?: boolean
   stemCount?: number
+  priority?: boolean
   onToggleSelect?: (asset: Asset) => void
 }) {
   const openInspector = useUiStore((s) => s.openInspector)
-  const [thumbBroken, setThumbBroken] = useState(false)
   const type = assetType(asset)
   const meta = parseMetadata(asset)
   const gen = meta.gen
-  const fallbackSrc = mediaUrl(
-    type === 'video' ? `/videos/${asset.filename}` : type === 'audio' ? `/audio/${asset.filename}` : `/images/${asset.filename}`,
-  )
-  const src = thumbBroken ? fallbackSrc : mediaUrl(`/thumbnails/${asset.id}.jpg`)
+  const src = mediaUrl(`/thumbnails/${asset.id}.jpg`)
   const upscale = gen?.upscale?.status === 'done'
   const label = String(meta.name || titleFromPrompt(gen?.original_prompt || asset.prompt))
 
@@ -74,13 +123,7 @@ export function MediaCard({
     >
       {type === 'image' || type === 'video' ? (
         <>
-          <img
-            src={src}
-            alt={label}
-            loading="lazy"
-            onError={() => setThumbBroken(true)}
-            className="size-full object-cover transition duration-300 group-hover:scale-[1.02]"
-          />
+          <LazyThumbnail src={src} alt={label} priority={priority} />
           {type === 'video' ? (
             <span className="absolute inset-0 grid place-items-center bg-black/10 opacity-0 transition group-hover:opacity-100">
               <span className="grid size-10 place-items-center rounded-full bg-black/65 text-white backdrop-blur">
@@ -237,7 +280,7 @@ export function MediaGrid({
     <div className="grid items-start gap-2" style={gridStyle}>
       {columns.map((column, columnIndex) => (
         <div key={columnIndex} className="min-w-0 space-y-2">
-          {column.map((asset) => (
+          {column.map((asset, index) => (
             <MediaCard
               key={asset.id}
               asset={asset}
@@ -246,6 +289,7 @@ export function MediaGrid({
               selected={selectedIds?.has(asset.id) ?? false}
               highlighted={highlightedId === asset.id}
               stemCount={stemCounts?.get(asset.id)}
+              priority={index === 0}
               onToggleSelect={onToggleSelect}
             />
           ))}

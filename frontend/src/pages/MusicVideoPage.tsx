@@ -31,6 +31,7 @@ import { assetDisplayName } from '../lib/assets'
 import { isStemAsset } from '../lib/stems'
 import { runSerializedGeneration } from '../lib/generationQueue'
 import { useHistory, useSettings } from '../lib/queries'
+import { videoResolutionsFor } from '../lib/videoResolutions'
 import { PageContainer } from '../components/shell/PageContainer'
 import { PageHeader } from '../components/shell/PageHeader'
 import {
@@ -160,7 +161,6 @@ const modelOptions = [
   { value: 'grok', label: 'Grok' },
 ]
 
-const resolutionOptions = ['480p', '720p', '1080p']
 const aspectOptions = ['16:9', '9:16', '1:1', '3:2', '2:3']
 
 const imageRoleOptions: { value: NonNullable<SlotImage['role']>; label: string }[] = [
@@ -827,15 +827,16 @@ export function MusicVideoPage() {
     audioDuration && audioDuration > 0
       ? audioDuration
       : Math.max(8, ...allSegments.map(({ segment }) => segment.end_time || 0))
-  const projectModel =
-    project?.settings?.model ||
-    (settings.data?.video_model === 'fasth3'
+  const defaultProjectModel =
+    settings.data?.video_model === 'fasth3'
       ? 'fasth3'
       : settings.data?.video_model === 'grok'
         ? 'grok'
         : settings.data?.ltx_version === '2.5'
           ? 'ltx25'
-          : 'ltx23')
+          : 'ltx23'
+  const projectModel = project?.settings?.model || defaultProjectModel
+  const resolutionOptions = videoResolutionsFor(projectModel)
   const segmentMaxDuration = projectModel === 'fasth3' ? 15 : 40
 
   useEffect(() => {
@@ -1695,11 +1696,21 @@ export function MusicVideoPage() {
                   <Select
                     className="w-auto min-w-[130px]"
                     value={project.settings?.model || ''}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const nextModel = event.target.value
+                      const effectiveModel = nextModel || defaultProjectModel
+                      const currentResolution = project.settings?.resolution || '720p'
+                      const nextResolution = videoResolutionsFor(effectiveModel).includes(currentResolution)
+                        ? currentResolution
+                        : '1080p'
                       void patchProject('/settings', {
-                        settings: { ...(project.settings || {}), model: event.target.value },
+                        settings: {
+                          ...(project.settings || {}),
+                          model: nextModel,
+                          resolution: nextResolution,
+                        },
                       })
-                    }
+                    }}
                   >
                     {modelOptions.map((model) => (
                       <option key={model.value || 'default'} value={model.value}>

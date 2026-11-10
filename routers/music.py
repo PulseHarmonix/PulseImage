@@ -48,6 +48,8 @@ from services.comfy_service import (
     generate_single_image_audio_to_video,
     generate_single_image_to_video,
     generate_fasth3_multi_ref_video,
+    free_comfyui_memory,
+    should_free_vram_for_video,
 )
 from services.generation_service import save_generation
 from services.lwks_export_service import (
@@ -467,6 +469,10 @@ async def generate_music_segment(segment_id: str, request: Request):
 
         set_segment_status(segment_id, "generating")
 
+        comfy_vram_freed = False
+        if should_free_vram_for_video(video_model, resolution):
+            comfy_vram_freed = await free_comfyui_memory()
+
         use_multi_ref = video_model == "fasth3" and (
             len(image_filenames) > 1 or follow_on_video
         )
@@ -589,6 +595,7 @@ async def generate_music_segment(segment_id: str, request: Request):
                     "duration": out_duration,
                     "original_prompt": prompt,
                     "reference_image_size": "match" if follow_on_video else "max",
+                    "comfy_vram_freed": comfy_vram_freed,
                     "video_upscale": "relayvsr_x2"
                     if (result.get("upscale") or {}).get("status") == "done"
                     else "off",

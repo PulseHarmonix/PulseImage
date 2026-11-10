@@ -761,6 +761,40 @@ def resolve_video_model(video_model: str | None = None) -> str:
     return m if m in ("ltx", "fasth3", "grok") else "ltx"
 
 
+LTX_HIGHRES_RESOLUTIONS = {"1440p", "4K"}
+
+
+async def free_comfyui_memory() -> bool:
+    """Best-effort request for ComfyUI to unload models and free VRAM.
+
+    Waits for the queue to go idle first, then posts to /free. Never raises.
+    Returns True only when ComfyUI responds with HTTP 200.
+    """
+    try:
+        await wait_for_comfy_queue_idle()
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{get_comfyui_url()}/free",
+                json={"unload_models": True, "free_memory": True},
+            )
+            if response.status_code == 200:
+                print("[ComfyUI] Freed VRAM (unload_models + free_memory)")
+                return True
+            print(f"⚠️ ComfyUI /free returned status {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"⚠️ Failed to free ComfyUI memory: {e}")
+        return False
+
+
+def should_free_vram_for_video(video_model: str | None, resolution: str | None) -> bool:
+    """Return True only for LTX video at high resolutions (1440p/4K)."""
+    return resolve_video_model(video_model) == "ltx" and resolution in LTX_HIGHRES_RESOLUTIONS
+
+
 async def generate_single_video(
     prompt: str,
     resolution: str,

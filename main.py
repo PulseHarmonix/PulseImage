@@ -15,6 +15,7 @@ from services.settings_service import refresh_loras
 from services.database_service import init_db
 from services.music_video_service import reset_interrupted_segments
 from config import ensure_settings_in_db
+from utils.static_cache import CachedStaticFiles
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
@@ -64,7 +65,7 @@ app.include_router(stems.router)
 app.mount("/images", StaticFiles(directory="images"), name="images")
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 app.mount("/audio", StaticFiles(directory="audio"), name="audio")
-app.mount("/thumbnails", StaticFiles(directory="thumbnails"), name="thumbnails")
+app.mount("/thumbnails", CachedStaticFiles(directory="thumbnails", cache_control="public, max-age=604800, stale-while-revalidate=86400"), name="thumbnails")
 app.mount("/motion-presets", StaticFiles(directory="motion-presets"), name="motion-presets")
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
