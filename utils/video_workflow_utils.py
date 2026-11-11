@@ -788,6 +788,66 @@ def modify_relayvsr_workflow(
     return wf
 
 
+# ---------------------------------------------------------------------------
+# ReCaVSR X4 post-upscaling workflow
+# ---------------------------------------------------------------------------
+
+RECAVSR_WORKFLOW_PATH = os.path.join(BASE_DIR, "..", "workflows", "recavsr_video_4x.json")
+
+
+def load_base_recavsr_workflow() -> dict:
+    """Load the base ReCaVSR X4 video-upscaling workflow."""
+    with open(RECAVSR_WORKFLOW_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def modify_recavsr_workflow(
+    workflow: dict,
+    filename: str,
+    model: str | None = None,
+    scale: float = 4.0,
+    color_fix: str = "none",
+    seed: int = 42,
+    decoder: str = "flashdecoder",
+    kernels: str = "fast",
+    kv_offload: bool = False,
+    encoder: str = "auto",
+    filename_prefix: str = "video/ReCaVSR_X4",
+) -> dict:
+    """Inject the source video and upscale settings into the ReCaVSR graph.
+
+    The graph is fixed: LoadVideo -> ReCaVSRLoader -> ReCaVSRUpscale -> SaveVideo.
+    """
+    wf = copy.deepcopy(workflow)
+
+    if "1" in wf:  # LoadVideo
+        wf["1"]["inputs"]["file"] = filename
+
+    if model and "3" in wf:  # ReCaVSRLoader
+        wf["3"]["inputs"]["transformer"] = model
+
+    if "4" in wf:  # ReCaVSRUpscale
+        inputs = wf["4"]["inputs"]
+        try:
+            inputs["scale"] = float(scale)
+        except (TypeError, ValueError):
+            inputs["scale"] = 4.0
+        inputs["color_fix"] = color_fix
+        try:
+            inputs["seed"] = int(seed)
+        except (TypeError, ValueError):
+            inputs["seed"] = 42
+        inputs["decoder"] = decoder
+        inputs["kernels"] = kernels
+        inputs["kv_offload"] = bool(kv_offload)
+        inputs["encoder"] = encoder
+
+    if "6" in wf:  # SaveVideo
+        wf["6"]["inputs"]["filename_prefix"] = filename_prefix
+
+    return wf
+
+
 def _add_fasth3_multi_ref_guide_nodes(wf: dict) -> None:
     """Add a frame-0 image guide to a multi-ref graph if it is missing."""
     if "901" not in wf:

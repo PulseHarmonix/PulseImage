@@ -284,15 +284,18 @@ async def generate_stream(data: dict):
 
 @router.post("/upscale-video")
 async def upscale_video(data: dict):
-    """Upscale an existing video asset into a new derived asset via RelayVSR X2."""
+    """Upscale an existing video asset with the selected video upscaler."""
     asset_id = (data or {}).get("asset_id")
     if not asset_id:
         return {"success": False, "error": "asset_id is required"}
 
     job_id = (data or {}).get("job_id") or ""
     detail = (data or {}).get("detail")
+    video_upscale = (data or {}).get("video_upscale")
 
-    result = await upscale_existing_asset(asset_id, job_id=job_id, detail=detail)
+    result = await upscale_existing_asset(
+        asset_id, job_id=job_id, detail=detail, requested=video_upscale
+    )
     return {
         "success": bool(result.get("success")),
         "result": result.get("result"),

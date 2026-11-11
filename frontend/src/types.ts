@@ -245,6 +245,16 @@ export interface RelayStatus {
   url?: string
 }
 
+export interface ReCaVSRStatus {
+  available: boolean
+  implemented: boolean
+  nodes_ok: boolean
+  models_ok: boolean
+  missing: string[]
+  model?: string
+  url?: string
+}
+
 export interface ProgressSnapshot {
   job_id?: string
   index?: number

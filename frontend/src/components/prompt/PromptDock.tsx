@@ -459,6 +459,17 @@ export function PromptDock() {
       : 'relayvsr_x2'
   const upscaleEngine = upscaleEngineLabel(activeUpscaleEngineValue)
   const upscaleFactorValue = upscaleFactor(activeUpscaleEngineValue)
+  const activeUpscaleIsRecavsr = activeUpscaleEngineValue.toLowerCase().includes('recavsr')
+  const upscaleAvailable = activeUpscaleIsRecavsr
+    ? relay.data?.recavsr
+      ? relay.data.recavsr.available && relay.data.recavsr.implemented
+      : undefined
+    : relay.data?.relayvsr?.available
+  const upscaleUnavailable = upscaleAvailable === false
+  const upscaleUnavailableReason =
+    activeUpscaleIsRecavsr && relay.data?.recavsr && !relay.data.recavsr.implemented
+      ? 'integration pending'
+      : 'unavailable'
   const effectiveUpscale =
     tab.upscale ?? Boolean(activeUpscaleSetting && activeUpscaleSetting !== 'off')
 
@@ -994,16 +1005,22 @@ export function PromptDock() {
           {tab.mode === 'video' ? (
             <button
               onClick={() => updateActive({ upscale: !effectiveUpscale })}
+              disabled={upscaleUnavailable}
               className={cn(
                 'flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition',
                 effectiveUpscale
                   ? 'border-lime/30 bg-lime-soft text-lime'
-                  : 'border-line text-text-3 hover:border-line-strong hover:text-text-2',
+                  : 'border-line text-text-3',
+                upscaleUnavailable
+                  ? 'cursor-not-allowed opacity-45'
+                  : effectiveUpscale
+                    ? ''
+                    : 'hover:border-line-strong hover:text-text-2',
               )}
               title={
-                relay.data?.relayvsr?.available
-                  ? `${upscaleEngine} ${upscaleFactorValue}x upscale ${effectiveUpscale ? 'on' : 'off'}`
-                  : `${upscaleEngine} unavailable`
+                upscaleUnavailable
+                  ? `${upscaleEngine} ${upscaleUnavailableReason}`
+                  : `${upscaleEngine} ${upscaleFactorValue}x upscale ${effectiveUpscale ? 'on' : 'off'}`
               }
             >
               <Zap className="size-3" />

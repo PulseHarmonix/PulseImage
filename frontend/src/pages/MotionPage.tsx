@@ -111,9 +111,19 @@ export function MotionPage() {
       : 'relayvsr_x2'
   const upscaleEngine = upscaleEngineLabel(activeUpscaleEngineValue)
   const upscaleFactorValue = upscaleFactor(activeUpscaleEngineValue)
+  const activeUpscaleIsRecavsr = activeUpscaleEngineValue.toLowerCase().includes('recavsr')
+  const upscaleAvailable = activeUpscaleIsRecavsr
+    ? relay.data?.recavsr
+      ? relay.data.recavsr.available && relay.data.recavsr.implemented
+      : undefined
+    : relay.data?.relayvsr?.available
+  const upscaleDisabled = upscaleAvailable === false
+  const upscaleDisabledReason =
+    activeUpscaleIsRecavsr && relay.data?.recavsr && !relay.data.recavsr.implemented
+      ? 'integration pending'
+      : 'is unavailable'
   const effectiveUpscale =
     upscale ?? Boolean(activeUpscaleSetting && activeUpscaleSetting !== 'off')
-  const upscaleDisabled = relay.data?.relayvsr?.available === false
 
   useEffect(() => {
     if (!resolutionOptions.includes(resolution)) {
@@ -481,7 +491,7 @@ export function MotionPage() {
                     )}
                     title={
                       upscaleDisabled
-                        ? `${upscaleEngine} is unavailable`
+                        ? `${upscaleEngine} ${upscaleDisabledReason}`
                         : `${upscaleEngine} ${upscaleFactorValue}x upscale ${effectiveUpscale ? 'on' : 'off'}`
                     }
                   >

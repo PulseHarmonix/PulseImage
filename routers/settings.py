@@ -55,7 +55,7 @@ async def post_settings(request: Request):
                     current["ltx_version"] = v
             if "fasth3_mode" in data and data["fasth3_mode"] in ("reference", "i2v"):
                 current["fasth3_mode"] = data["fasth3_mode"]
-            if "video_upscale" in data and data["video_upscale"] in ("off", "relayvsr_x2"):
+            if "video_upscale" in data and data["video_upscale"] in ("off", "relayvsr_x2", "recavsr_x4"):
                 current["video_upscale"] = data["video_upscale"]
             if "relayvsr_detail" in data:
                 try:
@@ -67,6 +67,13 @@ async def post_settings(request: Request):
                     t = int(data["relayvsr_timeout_seconds"])
                     if t > 0:
                         current["relayvsr_timeout_seconds"] = t
+                except (TypeError, ValueError):
+                    pass
+            if "recavsr_timeout_seconds" in data:
+                try:
+                    t = int(data["recavsr_timeout_seconds"])
+                    if t > 0:
+                        current["recavsr_timeout_seconds"] = t
                 except (TypeError, ValueError):
                     pass
             if "relayvsr_model" in data and isinstance(data["relayvsr_model"], str) and data["relayvsr_model"].strip():

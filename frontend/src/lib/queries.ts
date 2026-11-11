@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from './api'
-import type { AppSettings, Asset, RelayStatus, TtsEngine } from '../types'
+import type { AppSettings, Asset, ReCaVSRStatus, RelayStatus, TtsEngine } from '../types'
 
 export const queryKeys = {
   history: ['history'] as const,
@@ -104,9 +104,11 @@ export function useRelayCapabilities() {
   return useQuery({
     queryKey: queryKeys.capabilities,
     queryFn: async () => {
-      const response = await apiGet<{ relayvsr?: RelayStatus; video_upscale?: string }>(
-        '/comfy/capabilities',
-      )
+      const response = await apiGet<{
+        relayvsr?: RelayStatus
+        recavsr?: ReCaVSRStatus
+        video_upscale?: string
+      }>('/comfy/capabilities')
       return response
     },
     staleTime: 20_000,

@@ -12,6 +12,7 @@ export function upscaleFactor(value?: string | null, fallback = 2): number {
   const normalized = (value ?? '').trim().toLowerCase()
   if (!normalized || normalized === 'off') return fallback
   if (normalized === 'recavsr_x2') return 2
+  if (normalized === 'recavsr_x4') return 4
   if (normalized.includes('recavsr')) return 4
   if (normalized === 'relayvsr_x2' || normalized.includes('relay')) return 2
   return fallback

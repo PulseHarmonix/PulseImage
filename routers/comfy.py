@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -19,11 +21,15 @@ async def comfy_status():
 
 @router.get("/comfy/capabilities")
 async def comfy_capabilities():
-    """Return optional ComfyUI capability status (currently RelayVSR X2)."""
-    from services.video_upscale_service import get_relayvsr_status
-    status = await get_relayvsr_status()
+    """Return optional ComfyUI capability status (RelayVSR X2 and ReCaVSR X4)."""
+    from services.video_upscale_service import get_recavsr_status, get_relayvsr_status
+    status, recavsr = await asyncio.gather(
+        get_relayvsr_status(),
+        get_recavsr_status(),
+    )
     return JSONResponse({
         "relayvsr": status,
+        "recavsr": recavsr,
         "video_upscale": "relayvsr_x2" if status.get("available") else "off",
     })
 

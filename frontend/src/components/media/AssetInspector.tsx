@@ -232,7 +232,11 @@ export function AssetInspector() {
           error?: string
           result?: GeneratedResult
           asset?: Asset
-        }>('/upscale-video', { asset_id: asset.id, job_id: jobId }),
+        }>('/upscale-video', {
+          asset_id: asset.id,
+          job_id: jobId,
+          video_upscale: activeUpscaleEngine,
+        }),
       )
       if (!result.success) throw new Error(result.error || 'Upscale failed')
       updateQueue(jobId, { status: 'done', progress: 100, finishedAt: Date.now() })

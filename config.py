@@ -12,6 +12,7 @@ def _get_defaults() -> dict:
         "video_upscale": "off",
         "relayvsr_detail": 1.0,
         "relayvsr_timeout_seconds": 1800,
+        "recavsr_timeout_seconds": 7200,
         "relayvsr_model": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
         "relayvsr_vae": "relayvsr_flash_vae_x2_fp32.safetensors",
         "library_video_playback": "1st_frame",
@@ -87,14 +88,14 @@ def _apply_defaults(s: dict) -> dict:
                 s[key] = clean
         elif key == "xai_api_key" and not isinstance(s[key], str):
             s[key] = default_val
-        elif key == "video_upscale" and s[key] not in ("off", "relayvsr_x2"):
+        elif key == "video_upscale" and s[key] not in ("off", "relayvsr_x2", "recavsr_x4"):
             s[key] = default_val
         elif key == "relayvsr_detail":
             try:
                 s[key] = max(0.0, min(1.0, float(s[key])))
             except (TypeError, ValueError):
                 s[key] = default_val
-        elif key == "relayvsr_timeout_seconds":
+        elif key in ("relayvsr_timeout_seconds", "recavsr_timeout_seconds"):
             try:
                 val = int(s[key])
                 s[key] = val if val > 0 else default_val

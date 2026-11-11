@@ -163,6 +163,16 @@ export function ModelsPage() {
 
   const data = settings.data
   const relayStatus = relay.data?.relayvsr
+  const recavsrStatus = relay.data?.recavsr
+  const activeUpscale = data?.video_upscale || 'off'
+  const recavsrHint = !recavsrStatus
+    ? 'Checking'
+    : !recavsrStatus.available
+      ? 'Not installed'
+      : !recavsrStatus.implemented
+        ? 'Integration pending'
+        : 'Ready'
+  const relayHint = !relayStatus ? 'Checking' : relayStatus.available ? 'Ready' : 'Unavailable'
   const stemStatus = stems.data
   const enhancers = data?.prompt_enhancers ?? []
   const stemLabel = !stemStatus
@@ -193,7 +203,7 @@ export function ModelsPage() {
       <PageHeader
         eyebrow="Models"
         title="Tune the engine room."
-        description="Choose generation models, inspect ComfyUI assets, and check RelayVSR readiness."
+        description="Choose generation models, inspect ComfyUI assets, and check upscaler readiness."
         actions={
           <div className="flex items-center gap-2">
             {saved ? (
@@ -206,6 +216,7 @@ export function ModelsPage() {
               onClick={() => {
                 void refreshModels()
                 void stems.refetch()
+                void relay.refetch()
               }}
               busy={refreshing || stems.isFetching}
             >
@@ -306,32 +317,83 @@ export function ModelsPage() {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Panel icon={<Zap className="size-4" />} title="RelayVSR X2" subtitle="Optional video post-upscale">
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] p-3">
-            <div>
-              <p className="text-xs font-medium">Status</p>
-              <p className="mt-0.5 text-[11px] text-text-3">
-                {relayStatus?.available
-                  ? 'Nodes and weights are ready.'
-                  : relayStatus?.missing?.length
-                    ? relayStatus.missing.join(' · ')
-                    : 'Checking ComfyUI…'}
-              </p>
+        <Panel icon={<Zap className="size-4" />} title="Upscalers" subtitle="Default video post-upscale">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Option
+              active={activeUpscale === 'off'}
+              label="Off"
+              hint="No upscale"
+              onClick={() => void save({ video_upscale: 'off' })}
+            />
+            <Option
+              active={activeUpscale === 'relayvsr_x2'}
+              label="RelayVSR 2x"
+              hint={relayHint}
+              disabled={Boolean(relayStatus && !relayStatus.available)}
+              onClick={() => void save({ video_upscale: 'relayvsr_x2' })}
+            />
+            <Option
+              active={activeUpscale === 'recavsr_x4'}
+              label="ReCaVSR 4x"
+              hint={recavsrHint}
+              disabled={!recavsrStatus?.implemented || !recavsrStatus?.available}
+              onClick={() => void save({ video_upscale: 'recavsr_x4' })}
+            />
+          </div>
+          <div className="mt-3 space-y-2 text-[11px]">
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium text-text-2">RelayVSR 2x</p>
+                <p className="mt-0.5 text-[10px] text-text-3">
+                  {relayStatus?.available
+                    ? 'Nodes and weights are ready.'
+                    : relayStatus?.missing?.length
+                      ? relayStatus.missing.join(' · ')
+                      : relayStatus
+                        ? 'Unavailable'
+                        : 'Checking ComfyUI…'}
+                </p>
+              </div>
+              <Badge tone={relayStatus?.available ? 'success' : relayStatus ? 'danger' : 'default'}>
+                {relayHint}
+              </Badge>
             </div>
-            <Badge tone={relayStatus?.available ? 'success' : relayStatus ? 'danger' : 'default'}>
-              {relayStatus?.available ? 'Ready' : relayStatus ? 'Unavailable' : 'Checking'}
-            </Badge>
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium text-text-2">ReCaVSR 4x</p>
+                <p className="mt-0.5 text-[10px] text-text-3">
+                  {!recavsrStatus
+                    ? 'Checking ComfyUI…'
+                    : !recavsrStatus.available
+                      ? recavsrStatus.missing?.length
+                        ? recavsrStatus.missing.join(' · ')
+                        : 'Not installed'
+                      : !recavsrStatus.implemented
+                        ? 'Nodes and weights are ready — integration is still pending.'
+                        : recavsrStatus.model
+                          ? `Nodes and weights are ready · ${recavsrStatus.model}`
+                          : 'Nodes and weights are ready.'}
+                </p>
+              </div>
+              <Badge
+                tone={
+                  !recavsrStatus
+                    ? 'default'
+                    : recavsrStatus.implemented && recavsrStatus.available
+                      ? 'success'
+                      : !recavsrStatus.implemented
+                        ? 'warning'
+                        : 'danger'
+                }
+              >
+                {recavsrHint}
+              </Badge>
+            </div>
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <Button
-              variant={data?.video_upscale === 'relayvsr_x2' ? 'soft' : 'outline'}
-              size="sm"
-              onClick={() => void save({ video_upscale: data?.video_upscale === 'relayvsr_x2' ? 'off' : 'relayvsr_x2' })}
-            >
-              {data?.video_upscale === 'relayvsr_x2' ? 'Default on' : 'Default off'}
-            </Button>
-            <span className="text-[10px] text-text-3">Per-generation overrides remain available.</span>
-          </div>
+          <p className="mt-2 text-[10px] text-text-3">
+            Off disables upscaling by default. Per-generation overrides remain available.
+            ReCaVSR 4x is limited to 4096 px per side / 4K output for H.264 playback.
+          </p>
         </Panel>
         <Panel icon={<Cpu className="size-4" />} title="ComfyUI" subtitle="Server and workflow assets">
           <div className="flex items-center justify-between rounded-xl border border-line bg-white/[0.02] p-3">
@@ -535,21 +597,29 @@ function Option({
   active,
   label,
   hint,
+  disabled,
   onClick,
 }: {
   active?: boolean
   label: string
   hint?: string
+  disabled?: boolean
   onClick: () => void
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         'flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-[11px] font-medium transition',
         active
           ? 'border-lime/30 bg-lime-soft text-lime'
-          : 'border-line bg-white/[0.02] text-text-2 hover:border-line-strong hover:text-text',
+          : 'border-line bg-white/[0.02] text-text-2',
+        disabled
+          ? 'cursor-not-allowed opacity-45'
+          : active
+            ? ''
+            : 'hover:border-line-strong hover:text-text',
       )}
     >
       <span>{label}</span>

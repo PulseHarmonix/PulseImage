@@ -1,0 +1,58 @@
+{
+  "1": {
+    "inputs": {
+      "file": "source_video.mp4"
+    },
+    "class_type": "LoadVideo",
+    "_meta": {
+      "title": "Load Video"
+    }
+  },
+  "3": {
+    "inputs": {
+      "transformer": "transformer_int8_convrot.safetensors"
+    },
+    "class_type": "ReCaVSRLoader",
+    "_meta": {
+      "title": "ReCaVSR Loader"
+    }
+  },
+  "4": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "video": [
+        "1",
+        0
+      ],
+      "scale": 4.0,
+      "color_fix": "none",
+      "seed": 42,
+      "decoder": "flashdecoder",
+      "kernels": "fast",
+      "kv_offload": false,
+      "encoder": "h264 nvenc"
+    },
+    "class_type": "ReCaVSRUpscale",
+    "_meta": {
+      "title": "ReCaVSR Upscale"
+    }
+  },
+  "6": {
+    "inputs": {
+      "video": [
+        "4",
+        0
+      ],
+      "filename_prefix": "video/ReCaVSR_X4",
+      "format": "auto",
+      "codec": "auto"
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  }
+}
