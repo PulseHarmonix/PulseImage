@@ -37,6 +37,7 @@ import { runSerializedGeneration } from '../../lib/generationQueue'
 import { scoreViewFromAsset } from '../../lib/musicScore'
 import { isMusicAsset } from '../../lib/musicTracks'
 import { isStemAsset, stemMeta } from '../../lib/stems'
+import { upscaleFactor, upscaleFactorFromAsset } from '../../lib/upscale'
 import { usePromptStore } from '../../stores/prompt'
 import { useMusicGeneratorStore } from '../../stores/musicGenerator'
 import { useStemsStore } from '../../stores/stems'
@@ -129,6 +130,16 @@ export function AssetInspector() {
   const type = assetType(asset)
   const meta = parseMetadata(asset)
   const gen = parseGen(asset)
+  const activeUpscaleSetting = settings.data?.video_upscale
+  const activeUpscaleEngine =
+    activeUpscaleSetting && activeUpscaleSetting !== 'off'
+      ? activeUpscaleSetting
+      : 'relayvsr_x2'
+  const activeUpscaleFactor = upscaleFactor(activeUpscaleEngine)
+  const assetUpscaleFactor = upscaleFactorFromAsset(asset)
+  const assetUpscaleOn =
+    Boolean(gen?.video_upscale && gen.video_upscale !== 'off') ||
+    gen?.upscale?.status === 'done'
   const tts = asRecord(meta.tts)
   const music = asRecord(meta.music)
   const musicModel = metaString(music?.model)
@@ -364,8 +375,7 @@ export function AssetInspector() {
     const videoModel = settings.data?.video_model || gen?.video_model || 'ltx'
     const ltxVersion = settings.data?.ltx_version || gen?.ltx_version || '2.3'
     const fasth3Mode = settings.data?.fasth3_mode || gen?.fasth3_mode || 'reference'
-    const upscaleRequested =
-      gen?.video_upscale === 'relayvsr_x2' || gen?.upscale?.status === 'done'
+    const upscaleRequested = assetUpscaleOn
     const jobId = uid('video')
     let stopProgress: (() => void) | null = null
 
@@ -406,7 +416,7 @@ export function AssetInspector() {
           video_model: videoModel,
           ltx_version: ltxVersion,
           fasth3_mode: fasth3Mode,
-          video_upscale: upscaleRequested ? 'relayvsr_x2' : 'off',
+          video_upscale: upscaleRequested ? activeUpscaleEngine : 'off',
           job_id: jobId,
         }),
       )
@@ -433,7 +443,7 @@ export function AssetInspector() {
           video_model: videoModel,
           ltx_version: ltxVersion,
           fasth3_mode: fasth3Mode,
-          video_upscale: upscaleRequested ? 'relayvsr_x2' : 'off',
+          video_upscale: upscaleRequested ? activeUpscaleEngine : 'off',
           upscale: result.upscale,
           attachments: {
             images: [{ id: asset.id, name: asset.filename, type: 'image' }],
@@ -505,7 +515,7 @@ export function AssetInspector() {
       fasth3Mode: gen?.fasth3_mode || settings.data?.fasth3_mode || 'reference',
       imageModel: gen?.image_model || settings.data?.image_model || 'schnell',
       i2iModel: gen?.i2i_model || settings.data?.i2i_model || 'klein',
-      upscale: gen?.video_upscale === 'relayvsr_x2' || gen?.upscale?.status === 'done',
+      upscale: assetUpscaleOn,
       attachments,
       ...(gen?.h3 ? { h3: gen.h3 as unknown as PromptTab['h3'] } : {}),
       ...(gen?.ltx ? { ltx: gen.ltx as unknown as PromptTab['ltx'] } : {}),
@@ -596,7 +606,9 @@ export function AssetInspector() {
               {asset.duration ? <Badge>{formatDuration(asset.duration)}</Badge> : null}
               {modelName ? <Badge tone="lime">{modelLabel}</Badge> : null}
               {gen?.resolution ? <Badge>{gen.resolution}</Badge> : null}
-              {upscaleDone ? <Badge tone="success">2× upscaled</Badge> : null}
+              {upscaleDone ? (
+                <Badge tone="success">{assetUpscaleFactor}× upscaled</Badge>
+              ) : null}
             </div>
           </div>
 
@@ -645,7 +657,7 @@ export function AssetInspector() {
                 onClick={() => void upscale()}
                 disabled={busy || upscaleDone}
               >
-                {upscaleDone ? 'Upscaled' : 'Upscale 2×'}
+                {upscaleDone ? 'Upscaled' : `Upscale ${activeUpscaleFactor}×`}
               </Button>
             ) : null}
             {type === 'image' ? (

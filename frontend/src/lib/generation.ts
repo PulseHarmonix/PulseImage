@@ -24,8 +24,14 @@ export interface RunGenerationOptions {
   extraMetadata?: Partial<GenMetadata>
 }
 
+function activeUpscaleEngine(settings?: AppSettings): string {
+  const value = settings?.video_upscale
+  return value && value !== 'off' ? value : 'relayvsr_x2'
+}
+
 function upscaleEnabled(tab: PromptTab, settings?: AppSettings): boolean {
-  return tab.upscale ?? settings?.video_upscale === 'relayvsr_x2'
+  const active = settings?.video_upscale
+  return tab.upscale ?? Boolean(active && active !== 'off')
 }
 
 function metadataFor(
@@ -33,6 +39,7 @@ function metadataFor(
   result?: GeneratedResult,
   upscale?: boolean,
   extraMetadata?: Partial<GenMetadata>,
+  settings?: AppSettings,
 ): GenMetadata {
   const images = tab.attachments
     .filter((a) => a.type === 'image' || a.type === 'video')
@@ -59,7 +66,9 @@ function metadataFor(
       tab.mode === 'video' && tab.videoModel === 'ltx' ? tab.ltxVersion : undefined,
     fasth3_mode:
       tab.mode === 'video' && tab.videoModel === 'fasth3' ? tab.fasth3Mode : undefined,
-    video_upscale: (upscale ?? Boolean(tab.upscale)) ? 'relayvsr_x2' : 'off',
+    video_upscale: (upscale ?? Boolean(tab.upscale))
+      ? activeUpscaleEngine(settings)
+      : 'off',
     upscale: result?.upscale,
     attachments: {
       images,
@@ -79,6 +88,7 @@ export async function saveGeneratedAsset(
   upscale?: boolean,
   parentId?: string,
   extraMetadata?: Partial<GenMetadata>,
+  settings?: AppSettings,
 ): Promise<string | undefined> {
   const filename = result.local_filename || result.filename
   if (!filename) return undefined
@@ -93,7 +103,7 @@ export async function saveGeneratedAsset(
       height: result.height || 0,
       duration: type === 'video' ? result.duration || tab.duration : undefined,
       parent_id: parentId,
-      metadata: { gen: metadataFor(tab, result, upscale, extraMetadata) },
+      metadata: { gen: metadataFor(tab, result, upscale, extraMetadata, settings) },
     },
   )
   if (!response.success) throw new Error(response.error || 'Could not save generation')
@@ -220,6 +230,7 @@ export async function runGeneration(
           undefined,
           options?.parentId,
           options?.extraMetadata,
+          settings,
         )
         if (id) ids.push(id)
       }
@@ -232,7 +243,7 @@ export async function runGeneration(
     body.video_model = tab.videoModel
     body.ltx_version = tab.ltxVersion
     body.fasth3_mode = tab.fasth3Mode
-    body.video_upscale = upscale ? 'relayvsr_x2' : 'off'
+    body.video_upscale = upscale ? activeUpscaleEngine(settings) : 'off'
     if (images[0]) body.source_image = images[0].name
     if (images.length > 1 || (tab.videoModel === 'fasth3' && audios.length > 1)) {
       body.ref_images = images.map((image) => image.name)
@@ -261,6 +272,7 @@ export async function runGeneration(
         upscale,
         options?.parentId,
         options?.extraMetadata,
+        settings,
       )
       if (id) ids.push(id)
     }

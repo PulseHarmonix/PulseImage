@@ -761,9 +761,6 @@ def resolve_video_model(video_model: str | None = None) -> str:
     return m if m in ("ltx", "fasth3", "grok") else "ltx"
 
 
-LTX_HIGHRES_RESOLUTIONS = {"1440p", "4K"}
-
-
 async def free_comfyui_memory() -> bool:
     """Best-effort request for ComfyUI to unload models and free VRAM.
 
@@ -790,9 +787,15 @@ async def free_comfyui_memory() -> bool:
         return False
 
 
-def should_free_vram_for_video(video_model: str | None, resolution: str | None) -> bool:
-    """Return True only for LTX video at high resolutions (1440p/4K)."""
-    return resolve_video_model(video_model) == "ltx" and resolution in LTX_HIGHRES_RESOLUTIONS
+def should_free_vram_for_video(
+    video_model: str | None,
+    resolution: str | None = None,
+) -> bool:
+    """Return True for every local ComfyUI video model.
+
+    Grok runs in the cloud, so it does not need a local VRAM reset.
+    """
+    return resolve_video_model(video_model) in ("ltx", "fasth3")
 
 
 async def generate_single_video(

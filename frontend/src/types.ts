@@ -17,6 +17,7 @@ export interface GenUpscale {
   status?: 'done' | 'failed' | 'skipped' | 'success'
   engine?: string
   model?: string
+  factor?: number
   detail?: number
   source_filename?: string
   original_filename?: string

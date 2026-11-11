@@ -4,6 +4,7 @@ import { useUiStore } from '../../stores/ui'
 import { mediaUrl } from '../../lib/api'
 import { dispatchAttachAsset, dragPayload } from '../../lib/assets'
 import { assetType, cn, formatDuration, inferAspect, parseMetadata, titleFromPrompt } from '../../lib/utils'
+import { upscaleFactorFromAsset } from '../../lib/upscale'
 import { Badge } from '../ui'
 import type { Asset } from '../../types'
 
@@ -85,6 +86,7 @@ export function MediaCard({
   const gen = meta.gen
   const src = mediaUrl(`/thumbnails/${asset.id}.jpg`)
   const upscale = gen?.upscale?.status === 'done'
+  const upscaleFactorValue = upscaleFactorFromAsset(asset)
   const label = String(meta.name || titleFromPrompt(gen?.original_prompt || asset.prompt))
 
   const handleClick = () => {
@@ -197,7 +199,7 @@ export function MediaCard({
         )}
         {upscale ? (
           <Badge tone="success" className="bg-black/55 backdrop-blur">
-            <Zap className="size-2.5" /> 2×
+            <Zap className="size-2.5" /> {upscaleFactorValue}×
           </Badge>
         ) : null}
         {stemCount ? (

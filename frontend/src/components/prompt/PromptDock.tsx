@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowUp,
@@ -26,6 +35,7 @@ import { apiGet, apiUpload } from '../../lib/api'
 import { assetDisplayName, PULSE_ATTACH_EVENT, type AssetDragPayload } from '../../lib/assets'
 import { runGeneration } from '../../lib/generation'
 import { runSerializedGeneration } from '../../lib/generationQueue'
+import { upscaleEngineLabel, upscaleFactor } from '../../lib/upscale'
 import { BASE_VIDEO_RESOLUTIONS, LTX_VIDEO_RESOLUTIONS, videoResolutionsFor } from '../../lib/videoResolutions'
 import type { Attachment, PromptMode, PromptTab } from '../../types'
 import { cn, titleFromPrompt } from '../../lib/utils'
@@ -221,6 +231,8 @@ export function PromptDock() {
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed)
   const composerOpen = useUiStore((s) => s.composerOpen)
   const setComposerOpen = useUiStore((s) => s.setComposerOpen)
+  const composerPromptHeight = useUiStore((s) => s.composerPromptHeight)
+  const setComposerPromptHeight = useUiStore((s) => s.setComposerPromptHeight)
   const toast = useUiStore((s) => s.toast)
   const updateSettings = useUpdateSettings()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -238,6 +250,89 @@ export function PromptDock() {
   const [uploading, setUploading] = useState(false)
   const [loras, setLoras] = useState<string[]>([])
   const [dragOver, setDragOver] = useState(false)
+  const [promptHeight, setPromptHeight] = useState(composerPromptHeight)
+  const [resizingPrompt, setResizingPrompt] = useState(false)
+  const promptHeightRef = useRef(promptHeight)
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
+
+  useEffect(() => {
+    promptHeightRef.current = promptHeight
+  }, [promptHeight])
+
+  const clampPromptHeight = useCallback((value: number) => {
+    const max = Math.round(window.innerHeight * 0.6)
+    return Math.max(30, Math.min(value, max))
+  }, [])
+
+  useEffect(() => {
+    if (resizeDragRef.current) return
+    const next = clampPromptHeight(composerPromptHeight)
+    setPromptHeight(next)
+    promptHeightRef.current = next
+  }, [composerPromptHeight, clampPromptHeight])
+
+  useEffect(() => {
+    const handleResize = () => {
+      const next = clampPromptHeight(promptHeightRef.current)
+      if (next === promptHeightRef.current) return
+      promptHeightRef.current = next
+      setPromptHeight(next)
+      if (!resizeDragRef.current) setComposerPromptHeight(next)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [clampPromptHeight, setComposerPromptHeight])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (!composerOpen) {
+      root.style.removeProperty('--composer-extra-height')
+      return
+    }
+    root.style.setProperty('--composer-extra-height', `${Math.max(0, promptHeight - 30)}px`)
+    return () => {
+      root.style.removeProperty('--composer-extra-height')
+    }
+  }, [composerOpen, promptHeight])
+
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    resizeDragRef.current = { startY: event.clientY, startHeight: promptHeightRef.current }
+    setResizingPrompt(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.currentTarget.focus()
+  }
+
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current
+    if (!drag) return
+    const next = clampPromptHeight(drag.startHeight + (drag.startY - event.clientY))
+    promptHeightRef.current = next
+    setPromptHeight(next)
+  }
+
+  const finishResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current) return
+    resizeDragRef.current = null
+    setResizingPrompt(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    setComposerPromptHeight(promptHeightRef.current)
+  }
+
+  const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    let next: number | null = null
+    if (event.key === 'ArrowUp') next = promptHeightRef.current + 16
+    else if (event.key === 'ArrowDown') next = promptHeightRef.current - 16
+    else if (event.key === 'Home') next = 30
+    if (next === null) return
+    event.preventDefault()
+    const clamped = clampPromptHeight(next)
+    promptHeightRef.current = clamped
+    setPromptHeight(clamped)
+    setComposerPromptHeight(clamped)
+  }
 
   useEffect(() => {
     void apiGet<{ loras?: string[] }>('/loras')
@@ -357,7 +452,15 @@ export function PromptDock() {
   }, [settings.data?.prompt_enhancers])
 
   const videoSelection = tab.videoModel === 'ltx' ? `ltx-${tab.ltxVersion}` : tab.videoModel
-  const effectiveUpscale = tab.upscale ?? settings.data?.video_upscale === 'relayvsr_x2'
+  const activeUpscaleSetting = settings.data?.video_upscale
+  const activeUpscaleEngineValue =
+    activeUpscaleSetting && activeUpscaleSetting !== 'off'
+      ? activeUpscaleSetting
+      : 'relayvsr_x2'
+  const upscaleEngine = upscaleEngineLabel(activeUpscaleEngineValue)
+  const upscaleFactorValue = upscaleFactor(activeUpscaleEngineValue)
+  const effectiveUpscale =
+    tab.upscale ?? Boolean(activeUpscaleSetting && activeUpscaleSetting !== 'off')
 
   const setVideoSelection = (value: string) => {
     const nextModel = value.startsWith('ltx-') ? 'ltx' : value
@@ -662,13 +765,36 @@ export function PromptDock() {
     >
       <div
         className={cn(
-          'animate-fade-up pointer-events-auto w-full overflow-visible border-t border-line-strong bg-[#111214]/95 shadow-[0_-16px_50px_rgba(0,0,0,0.35)] backdrop-blur-2xl transition',
+          'animate-fade-up pointer-events-auto w-full overflow-visible border-t border-line-strong bg-[#111214]/95 shadow-[0_-16px_50px_rgba(0,0,0,0.35)] backdrop-blur-2xl',
+          resizingPrompt ? 'transition-none' : 'transition',
           dragOver && 'ring-2 ring-inset ring-lime/50',
         )}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize prompt editor"
+          tabIndex={0}
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onKeyDown={handleResizeKeyDown}
+          className={cn(
+            'group flex h-2.5 cursor-ns-resize touch-none select-none items-center justify-center border-b border-line/60 outline-none transition-colors focus-visible:bg-lime/10',
+            resizingPrompt ? 'bg-lime/20' : 'hover:bg-white/[0.04]',
+          )}
+        >
+          <span
+            className={cn(
+              'h-0.5 w-8 rounded-full transition-colors',
+              resizingPrompt ? 'bg-lime' : 'bg-line-strong group-hover:bg-lime/60',
+            )}
+          />
+        </div>
         <div className="flex items-center gap-1 overflow-x-auto border-b border-line px-2 pt-1 no-scrollbar">
           {tabs.map((item) => (
             <button
@@ -876,12 +1002,12 @@ export function PromptDock() {
               )}
               title={
                 relay.data?.relayvsr?.available
-                  ? `RelayVSR 2x upscale ${effectiveUpscale ? 'on' : 'off'}`
-                  : 'RelayVSR unavailable'
+                  ? `${upscaleEngine} ${upscaleFactorValue}x upscale ${effectiveUpscale ? 'on' : 'off'}`
+                  : `${upscaleEngine} unavailable`
               }
             >
               <Zap className="size-3" />
-              2x
+              {upscaleFactorValue}x
             </button>
           ) : null}
 
@@ -1074,7 +1200,8 @@ export function PromptDock() {
                   }
                 }}
                 rows={1}
-                className="min-h-[30px] flex-1 border-0 bg-transparent px-0 py-0.5 text-[11px] focus:bg-transparent"
+                style={{ height: promptHeight }}
+                className="min-h-[30px] flex-1 overflow-y-auto border-0 bg-transparent px-0 py-0.5 text-[11px] focus:bg-transparent"
                 placeholder={
                   tab.mode === 'video'
                     ? 'Describe the video, dialogue, sound, and camera…'

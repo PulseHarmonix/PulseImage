@@ -6,6 +6,7 @@ import { useHistory, useRelayCapabilities, useSettings, queryKeys } from '../lib
 import { mediaUrl } from '../lib/api'
 import { assetDisplayName, toAttachment } from '../lib/assets'
 import { runGeneration } from '../lib/generation'
+import { upscaleEngineLabel, upscaleFactor } from '../lib/upscale'
 import { BASE_VIDEO_RESOLUTIONS, videoResolutionsFor } from '../lib/videoResolutions'
 import { createPromptTab } from '../stores/prompt'
 import { useQueueStore } from '../stores/queue'
@@ -103,7 +104,15 @@ export function MotionPage() {
   const isFastH3 = resolved.videoModel === 'fasth3'
   const resolutionOptions = useMemo(() => videoResolutionsFor(resolved.videoModel), [resolved.videoModel])
   const effectiveDuration = isFastH3 ? Math.min(duration, 15) : duration
-  const effectiveUpscale = upscale ?? settings.data?.video_upscale === 'relayvsr_x2'
+  const activeUpscaleSetting = settings.data?.video_upscale
+  const activeUpscaleEngineValue =
+    activeUpscaleSetting && activeUpscaleSetting !== 'off'
+      ? activeUpscaleSetting
+      : 'relayvsr_x2'
+  const upscaleEngine = upscaleEngineLabel(activeUpscaleEngineValue)
+  const upscaleFactorValue = upscaleFactor(activeUpscaleEngineValue)
+  const effectiveUpscale =
+    upscale ?? Boolean(activeUpscaleSetting && activeUpscaleSetting !== 'off')
   const upscaleDisabled = relay.data?.relayvsr?.available === false
 
   useEffect(() => {
@@ -472,13 +481,13 @@ export function MotionPage() {
                     )}
                     title={
                       upscaleDisabled
-                        ? 'RelayVSR is unavailable'
-                        : `RelayVSR 2x upscale ${effectiveUpscale ? 'on' : 'off'}`
+                        ? `${upscaleEngine} is unavailable`
+                        : `${upscaleEngine} ${upscaleFactorValue}x upscale ${effectiveUpscale ? 'on' : 'off'}`
                     }
                   >
                     <span className="flex items-center gap-1.5">
                       <Zap className="size-3" />
-                      RelayVSR
+                      {upscaleEngine} {upscaleFactorValue}x
                     </span>
                     <span>{effectiveUpscale ? 'On' : 'Off'}</span>
                   </button>

@@ -8,12 +8,14 @@ interface UiStore {
   mobileSidebarOpen: boolean
   queueOpen: boolean
   composerOpen: boolean
+  composerPromptHeight: number
   inspectorId: string | null
   toasts: ToastMessage[]
   toggleSidebar: () => void
   setMobileSidebar: (open: boolean) => void
   setQueueOpen: (open: boolean) => void
   setComposerOpen: (open: boolean) => void
+  setComposerPromptHeight: (height: number) => void
   openInspector: (id: string | null) => void
   toast: (toast: Omit<ToastMessage, 'id'>) => void
   dismissToast: (id: string) => void
@@ -26,12 +28,14 @@ export const useUiStore = create<UiStore>()(
       mobileSidebarOpen: false,
       queueOpen: false,
       composerOpen: true,
+      composerPromptHeight: 30,
       inspectorId: null,
       toasts: [],
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setMobileSidebar: (open) => set({ mobileSidebarOpen: open }),
       setQueueOpen: (open) => set({ queueOpen: open }),
       setComposerOpen: (open) => set({ composerOpen: open }),
+      setComposerPromptHeight: (height) => set({ composerPromptHeight: height }),
       openInspector: (id) => set({ inspectorId: id }),
       toast: (toast) =>
         set((state) => ({
@@ -42,7 +46,10 @@ export const useUiStore = create<UiStore>()(
     }),
     {
       name: 'pulse.ui.v2',
-      partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed }),
+      partialize: (state) => ({
+        sidebarCollapsed: state.sidebarCollapsed,
+        composerPromptHeight: state.composerPromptHeight,
+      }),
     },
   ),
 )

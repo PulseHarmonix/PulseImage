@@ -37,7 +37,7 @@ export function AppShell() {
       <div
         style={{
           paddingBottom: showDock
-            ? `calc(${composerOpen ? '16rem' : '5rem'} + var(--music-player-height, 0px))`
+            ? `calc(${composerOpen ? '16rem' : '5rem'} + var(--composer-extra-height, 0px) + var(--music-player-height, 0px))`
             : 'var(--music-player-height, 0px)',
         }}
       >

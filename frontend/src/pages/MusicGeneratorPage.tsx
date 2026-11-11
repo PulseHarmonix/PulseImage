@@ -316,6 +316,7 @@ export function MusicGeneratorPage() {
           title: generationTitle,
           style,
           lyrics: instrumental ? '' : lyrics,
+          instrumental,
           planning,
           max_duration: maxDuration,
           acoustic_steps: acousticSteps,

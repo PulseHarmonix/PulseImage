@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 
@@ -26,10 +27,139 @@ AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm", ".
 PLANNING_MODES = ("full", "melody", "off")
 GENERATION_TIMEOUT_SECONDS = 3600
 WORKFLOW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows")
+INSTRUMENTAL_STYLE_SUFFIX = "instrumental, no singing, no vocals, no spoken words, no vocal samples"
+_INSTRUMENTAL_MARKERS = (
+    "instrumental",
+    "no vocal",
+    "no vocals",
+    "no singing",
+    "no sung",
+    "no spoken",
+)
+_ABC_NOTE = re.compile(
+    r"(?P<acc>\^\^|__|\^|_|=)?(?P<note>[A-Ga-g])"
+    r"(?P<octave>[,']*)(?P<length>\d*)(?P<tie>-?)"
+)
+_ABC_PROTECTED = re.compile(r'("[^"]*"|\[[^\]]*\]|\{[^}]*\})')
 
 
 def _workflow_path(filename: str) -> str:
     return os.path.join(WORKFLOW_DIR, filename)
+
+
+def _with_instrumental_style(style: str) -> str:
+    text = (style or "").strip()
+    lowered = text.casefold()
+    if any(marker in lowered for marker in _INSTRUMENTAL_MARKERS):
+        return text
+    if not text:
+        return INSTRUMENTAL_STYLE_SUFFIX
+    return f"{text}, {INSTRUMENTAL_STYLE_SUFFIX}"
+
+
+def _is_music_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith(
+        ("%", "V:", "w:", "M:", "L:", "K:", "Q:", "X:", "T:")
+    )
+
+
+def _count_notes(line: str) -> int:
+    count = 0
+    for part in _ABC_PROTECTED.split(line):
+        if not part or part[0] in '"[{':
+            continue
+        count += sum(1 for _ in _ABC_NOTE.finditer(part))
+    return count
+
+
+def _strip_chords(line: str) -> str:
+    return "".join(
+        part
+        for part in _ABC_PROTECTED.split(line)
+        if part and not part.startswith('"')
+    )
+
+
+def _fill_empty_ins(score: str) -> tuple[str, int]:
+    lines = (score or "").splitlines()
+    moved = 0
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != "V: Vocal":
+            index += 1
+            continue
+        vocal: list[int] = []
+        cursor = index + 1
+        while cursor < len(lines) and not lines[cursor].strip().startswith("V:"):
+            if _is_music_line(lines[cursor]):
+                vocal.append(cursor)
+            cursor += 1
+        if cursor >= len(lines) or lines[cursor].strip() != "V: Ins":
+            index = cursor
+            continue
+        ins: list[int] = []
+        cursor += 1
+        while (
+            cursor < len(lines)
+            and not lines[cursor].strip().startswith("V:")
+            and not lines[cursor].strip().startswith("%")
+        ):
+            if _is_music_line(lines[cursor]):
+                ins.append(cursor)
+            cursor += 1
+        for vocal_index, ins_index in zip(vocal, ins):
+            if _count_notes(lines[ins_index]):
+                continue
+            replacement = _strip_chords(lines[vocal_index])
+            notes = _count_notes(replacement)
+            if notes:
+                lines[ins_index] = replacement
+                moved += notes
+        index = cursor
+    return "\n".join(lines), moved
+
+
+def _silence_vocal_notes(score: str) -> tuple[str, int]:
+    lines: list[str] = []
+    voice = ""
+    silenced = 0
+    for line in (score or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("V:"):
+            voice = (
+                stripped[2:].strip().split()[0].casefold().rstrip(",")
+                if stripped[2:].strip()
+                else ""
+            )
+            lines.append(line)
+            continue
+        if stripped.startswith("w:"):
+            continue
+        if (
+            voice != "vocal"
+            or not stripped
+            or stripped.startswith(("%", "M:", "L:", "K:", "Q:", "X:", "T:"))
+        ):
+            lines.append(line)
+            continue
+        parts = _ABC_PROTECTED.split(line)
+        for index, part in enumerate(parts):
+            if not part or part[0] in '"[{':
+                continue
+            replaced, count = _ABC_NOTE.subn(
+                lambda match: "z" + (
+                    match.group("length")
+                    if match.group("length") and match.group("length") != "1"
+                    else ""
+                ),
+                part,
+            )
+            if count:
+                silenced += count
+                parts[index] = replaced
+        lines.append("".join(parts))
+    return "\n".join(lines), silenced
 
 
 def _clamp_int(value, low: int, high: int, default: int) -> int:
@@ -120,6 +250,7 @@ def build_text_workflow(
     abc_top_k: int,
     abc_repetition_penalty: float,
     abc_penalty_window: int,
+    supplied_abc: str | None = None,
 ) -> dict:
     workflow = _load_workflow(TEXT_WORKFLOW)
     workflow["33:15"]["inputs"]["ckpt_name"] = CHECKPOINT
@@ -165,6 +296,63 @@ def build_text_workflow(
         }
     )
     workflow["33:8"]["inputs"]["steps"] = acoustic_steps
+    if supplied_abc is not None:
+        workflow["33:32"]["inputs"]["value"] = supplied_abc
+        workflow["33:14"]["inputs"]["source"] = ["33:32", 0]
+        workflow["33:25"]["inputs"]["abc"] = ["33:32", 0]
+        for node in ("33:24", "33:30", "33:31"):
+            workflow.pop(node, None)
+    return workflow
+
+
+def build_score_workflow(
+    style: str,
+    lyrics: str,
+    planning: str,
+    max_score_tokens: int,
+    seed: int,
+    abc_temperature: float,
+    abc_top_p: float,
+    abc_top_k: int,
+    abc_repetition_penalty: float,
+    abc_penalty_window: int,
+) -> dict:
+    workflow = build_text_workflow(
+        style,
+        lyrics,
+        planning,
+        300,
+        32,
+        max_score_tokens,
+        seed,
+        1.0,
+        0.95,
+        100,
+        1.2,
+        1.0,
+        abc_temperature,
+        abc_top_p,
+        abc_top_k,
+        abc_repetition_penalty,
+        abc_penalty_window,
+    )
+    for node in ("33:25", "33:18", "33:8", "33:5", "33:9", "10"):
+        workflow.pop(node, None)
+    return workflow
+
+
+def build_cover_score_workflow(comfy_audio: str) -> dict:
+    workflow = _load_workflow(COVER_WORKFLOW)
+    workflow["45"]["inputs"]["audio"] = comfy_audio
+    workflow["33:41"]["inputs"].update(
+        {
+            "mode": "melody",
+            "audio_encoder": ["33:43", 0],
+            "audio": ["45", 0],
+        }
+    )
+    for node in ("33:25", "33:18", "33:8", "33:5", "33:9", "10"):
+        workflow.pop(node, None)
     return workflow
 
 
@@ -180,6 +368,7 @@ def build_cover_workflow(
     top_k: int,
     repetition_penalty: float,
     cfg_scale: float,
+    supplied_abc: str | None = None,
 ) -> dict:
     workflow = _load_workflow(COVER_WORKFLOW)
     workflow["33:15"]["inputs"]["ckpt_name"] = CHECKPOINT
@@ -201,6 +390,16 @@ def build_cover_workflow(
         }
     )
     workflow["33:8"]["inputs"]["steps"] = acoustic_steps
+    if supplied_abc is not None:
+        workflow["33:99"] = {
+            "inputs": {"value": supplied_abc},
+            "class_type": "PrimitiveString",
+            "_meta": {"title": "Instrumental ABC"},
+        }
+        workflow["33:25"]["inputs"]["abc"] = ["33:99", 0]
+        workflow["33:44"]["inputs"]["source"] = ["33:99", 0]
+        for node in ("33:41", "33:43", "45"):
+            workflow.pop(node, None)
     return workflow
 
 
@@ -375,6 +574,46 @@ async def _run_workflow(workflow: dict, job_id: str) -> tuple[dict | None, str |
         return None, str(exc)
 
 
+async def _run_score_workflow(
+    workflow: dict,
+    job_id: str,
+    score_node: str = TEXT_SCORE_NODE,
+) -> tuple[str | None, str | None]:
+    set_progress_job(job_id, 0)
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await post_prompt(client, workflow)
+            if response.status_code != 200:
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = {}
+                return None, detail.get("error") or f"ComfyUI error {response.status_code}"
+            prompt_id = response.json().get("prompt_id")
+            if not prompt_id:
+                return None, "No prompt_id returned by ComfyUI"
+
+            deadline = time.monotonic() + GENERATION_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                await asyncio.sleep(1)
+                try:
+                    history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
+                except Exception:
+                    continue
+                if prompt_id not in history:
+                    continue
+                item = history[prompt_id] or {}
+                error = _history_error(item)
+                if error:
+                    return None, error
+                score = _extract_text(item.get("outputs") or {}, score_node)
+                if score and "V:" in score:
+                    return score, None
+            return None, "YuE2 ABC planning timed out or produced no score"
+    except Exception as exc:
+        return None, str(exc)
+
+
 async def _save_audio_result(
     outputs: dict,
     style: str,
@@ -476,6 +715,7 @@ async def generate_song(
     style: str,
     lyrics: str,
     title: str = "",
+    instrumental: bool = False,
     planning: str = "full",
     max_duration: int = 300,
     acoustic_steps: int = 32,
@@ -503,7 +743,7 @@ async def generate_song(
         }
 
     style_text = (style or "").strip()
-    lyrics_text = lyrics or ""
+    lyrics_text = "" if instrumental else (lyrics or "")
     if not style_text and not _first_lyric_line(lyrics_text):
         return {"success": False, "error": "Style or lyrics are required"}
     planning_mode = str(planning or "full").strip().lower()
@@ -529,8 +769,34 @@ async def generate_song(
     )
     abc_penalty_window_val = _clamp_int(abc_penalty_window, 1, 20000, 100)
 
+    render_style = _with_instrumental_style(style_text) if instrumental else style_text
+    supplied_abc = None
+    instrumental_source_score = ""
+    instrumental_notes_moved = 0
+    instrumental_notes_silenced = 0
+    if instrumental:
+        planning_mode = "full" if planning_mode == "off" else planning_mode
+        score_workflow = build_score_workflow(
+            render_style,
+            "",
+            planning_mode,
+            max_score_tokens_val,
+            seed_val,
+            abc_temperature_val,
+            abc_top_p_val,
+            abc_top_k_val,
+            abc_repetition_penalty_val,
+            abc_penalty_window_val,
+        )
+        score_text, score_error = await _run_score_workflow(score_workflow, job_id)
+        if score_error or not score_text:
+            return {"success": False, "error": score_error or "YuE2 ABC planning failed"}
+        instrumental_source_score = score_text
+        filled_score, instrumental_notes_moved = _fill_empty_ins(score_text)
+        supplied_abc, instrumental_notes_silenced = _silence_vocal_notes(filled_score)
+
     workflow = build_text_workflow(
-        style_text,
+        render_style,
         lyrics_text,
         planning_mode,
         max_duration_val,
@@ -547,6 +813,7 @@ async def generate_song(
         abc_top_k_val,
         abc_repetition_penalty_val,
         abc_penalty_window_val,
+        supplied_abc,
     )
     outputs, error = await _run_workflow(workflow, job_id)
     if error or not outputs:
@@ -561,6 +828,12 @@ async def generate_song(
         max_duration_val,
         acoustic_steps_val,
         max_score_tokens_val,
+        extra_metadata={
+            "instrumental": bool(instrumental),
+            "instrumental_notes_moved": instrumental_notes_moved,
+            "instrumental_notes_silenced": instrumental_notes_silenced,
+            "instrumental_source_score": instrumental_source_score,
+        },
         sampling={
             "abc": {
                 "temperature": abc_temperature_val,
@@ -585,6 +858,7 @@ async def generate_cover(
     style: str,
     lyrics: str,
     title: str = "",
+    instrumental: bool = False,
     max_duration: int = 300,
     acoustic_steps: int = 32,
     max_score_tokens: int = 8192,
@@ -605,12 +879,31 @@ async def generate_cover(
     asset = get_asset_by_id(asset_id)
     if not asset or asset.get("type") != "audio":
         return {"success": False, "error": "Select an audio asset from the Library first"}
-    if not style.strip() and not lyrics.strip():
+    style_text = style.strip()
+    lyrics_text = "" if instrumental else lyrics
+    if not style_text and not lyrics_text.strip():
         return {"success": False, "error": "Style or lyrics are required"}
 
     comfy_audio = await upload_audio_to_comfy(asset["filename"])
     if not comfy_audio:
         return {"success": False, "error": "Failed to upload source audio to ComfyUI"}
+
+    supplied_abc = None
+    instrumental_source_score = ""
+    instrumental_notes_moved = 0
+    instrumental_notes_silenced = 0
+    if instrumental:
+        score_workflow = build_cover_score_workflow(comfy_audio)
+        score_text, score_error = await _run_score_workflow(
+            score_workflow,
+            job_id,
+            COVER_SCORE_NODE,
+        )
+        if score_error or not score_text:
+            return {"success": False, "error": score_error or "YuE2 cover planning failed"}
+        instrumental_source_score = score_text
+        filled_score, instrumental_notes_moved = _fill_empty_ins(score_text)
+        supplied_abc, instrumental_notes_silenced = _silence_vocal_notes(filled_score)
 
     max_duration_val = _clamp_int(max_duration, 8, 600, 300)
     acoustic_steps_val = _clamp_int(acoustic_steps, 1, 64, 32)
@@ -624,8 +917,8 @@ async def generate_cover(
 
     workflow = build_cover_workflow(
         comfy_audio,
-        style.strip(),
-        lyrics,
+        _with_instrumental_style(style_text) if instrumental else style_text,
+        lyrics_text,
         max_duration_val,
         acoustic_steps_val,
         seed_val,
@@ -634,21 +927,29 @@ async def generate_cover(
         top_k_val,
         repetition_penalty_val,
         cfg_scale_val,
+        supplied_abc,
     )
     outputs, error = await _run_workflow(workflow, job_id)
     if error or not outputs:
         return {"success": False, "error": error or "YuE2 cover generation failed"}
     return await _save_audio_result(
         outputs,
-        style.strip(),
-        lyrics,
+        style_text,
+        lyrics_text,
         title,
         "cover",
         seed_val,
         max_duration_val,
         acoustic_steps_val,
         max_score_tokens_val,
-        extra_metadata={"cover_of": asset_id, "cover_source": asset["filename"]},
+        extra_metadata={
+            "cover_of": asset_id,
+            "cover_source": asset["filename"],
+            "instrumental": bool(instrumental),
+            "instrumental_notes_moved": instrumental_notes_moved,
+            "instrumental_notes_silenced": instrumental_notes_silenced,
+            "instrumental_source_score": instrumental_source_score,
+        },
         sampling={
             "music": {
                 "temperature": temperature_val,

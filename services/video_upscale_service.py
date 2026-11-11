@@ -15,7 +15,7 @@ from typing import Optional
 import httpx
 
 from config import get_comfyui_url, load_app_settings
-from services.comfy_service import download_and_save_video, wait_for_comfy_queue_idle
+from services.comfy_service import download_and_save_video, free_comfyui_memory
 from services.comfy_progress import post_prompt, set_progress_job
 from services.video_frame_service import probe_video
 from utils.video_workflow_utils import (
@@ -254,7 +254,7 @@ async def upscale_video_relayvsr(
         if job_id:
             set_progress_job(job_id, 0)
 
-        await wait_for_comfy_queue_idle()
+        await free_comfyui_memory()
 
         comfy_name = await upload_video_to_comfy(local_filename)
         if not comfy_name:
