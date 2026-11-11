@@ -586,9 +586,10 @@ export function PromptDock() {
     return (
       <div
         className={cn(
-          'fixed inset-x-0 bottom-0 z-[58] md:pl-[264px]',
+          'fixed inset-x-0 z-[58] md:pl-[264px]',
           sidebarCollapsed && 'md:pl-[76px]',
         )}
+        style={{ bottom: 'var(--music-player-height, 0px)' }}
       >
         <div
           className={cn(
@@ -654,9 +655,10 @@ export function PromptDock() {
   return (
     <div
       className={cn(
-        'pointer-events-none fixed inset-x-0 bottom-0 z-[58] md:pl-[264px]',
+        'pointer-events-none fixed inset-x-0 z-[58] md:pl-[264px]',
         sidebarCollapsed && 'md:pl-[76px]',
       )}
+      style={{ bottom: 'var(--music-player-height, 0px)' }}
     >
       <div
         className={cn(

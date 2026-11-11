@@ -6,6 +6,7 @@ import { LibraryPage } from './pages/LibraryPage'
 import { MusicVideoPage } from './pages/MusicVideoPage'
 import { FramesPage } from './pages/FramesPage'
 import { MusicGeneratorPage } from './pages/MusicGeneratorPage'
+import { PlayerPage } from './pages/PlayerPage'
 import { MotionPage } from './pages/MotionPage'
 import { VoicesPage } from './pages/VoicesPage'
 import { ModelsPage } from './pages/ModelsPage'
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="music" element={<MusicVideoPage />} />
             <Route path="motion" element={<MotionPage />} />
             <Route path="songs" element={<MusicGeneratorPage />} />
+            <Route path="player" element={<PlayerPage />} />
             <Route path="frames" element={<FramesPage />} />
             <Route path="voices" element={<VoicesPage />} />
             <Route path="models" element={<ModelsPage />} />

@@ -35,6 +35,7 @@ import {
 } from '../../lib/assets'
 import { runSerializedGeneration } from '../../lib/generationQueue'
 import { scoreViewFromAsset } from '../../lib/musicScore'
+import { isMusicAsset } from '../../lib/musicTracks'
 import { isStemAsset, stemMeta } from '../../lib/stems'
 import { usePromptStore } from '../../stores/prompt'
 import { useMusicGeneratorStore } from '../../stores/musicGenerator'
@@ -150,9 +151,7 @@ export function AssetInspector() {
           ? speechEngine
           : undefined
   const modelLabel = modelDisplayName(modelName, videoVersion)
-  const isMusic =
-    type === 'audio' &&
-    (meta.source === 'yue2' || meta.is_music === true || meta.kind === 'music')
+  const isMusic = isMusicAsset(asset)
   const scoreView = isMusic ? scoreViewFromAsset(asset) : null
   const scoreOpen = scoreAssetId === asset.id
   const prompt = gen?.original_prompt || asset.prompt || ''
@@ -167,8 +166,8 @@ export function AssetInspector() {
     if (next) openInspector(next.id)
   }
 
-  const toggle = async (key: 'favorite' | 'character' | 'voice') => {
-    const value = !asset[key]
+  const toggle = async (key: 'favorite' | 'character' | 'voice' | 'music') => {
+    const value = key === 'music' ? !isMusic : !asset[key]
     try {
       await apiUpdateGeneration(asset.id, { [key]: value })
       void queryClient.invalidateQueries({ queryKey: queryKeys.history })
@@ -704,6 +703,15 @@ export function AssetInspector() {
                 onClick={() => void toggle('voice')}
               >
                 Voice
+              </Button>
+            ) : null}
+            {type === 'audio' ? (
+              <Button
+                variant={isMusic ? 'soft' : 'outline'}
+                icon={<Music2 className="size-3.5" />}
+                onClick={() => void toggle('music')}
+              >
+                Music
               </Button>
             ) : null}
             <Button

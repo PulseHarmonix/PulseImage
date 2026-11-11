@@ -3,11 +3,11 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   AudioLines,
   Camera,
-  Clapperboard,
   Frame,
   Image,
   Layers3,
   Library,
+  ListMusic,
   Mic2,
   Music2,
   PanelLeftClose,
@@ -24,7 +24,7 @@ import { useQueueStore } from '../../stores/queue'
 import { usePromptStore } from '../../stores/prompt'
 import { useComfyStatus, useHistory, useOllamaStatus } from '../../lib/queries'
 import { Badge, IconButton, Progress } from '../ui'
-import { cn, titleFromPrompt } from '../../lib/utils'
+import { cn } from '../../lib/utils'
 import type { PromptMode } from '../../types'
 
 const primaryNav = [
@@ -36,6 +36,7 @@ const primaryNav = [
 const workspaceNav = [
   { label: 'Library', icon: Library, to: '/library' },
   { label: 'Music', icon: Music2, to: '/songs' },
+  { label: 'Player', icon: ListMusic, to: '/player' },
   { label: 'Music Video', icon: AudioLines, to: '/music' },
   { label: 'Motion', icon: Camera, to: '/motion' },
   { label: 'Single Frame', icon: Frame, to: '/frames' },
@@ -212,21 +213,7 @@ export function Sidebar() {
             })}
           </NavSection>
 
-          {!collapsed && history.data?.length ? (
-            <NavSection label="Recent" collapsed={collapsed}>
-              {history.data.slice(0, 4).map((asset) => (
-                <button
-                  key={asset.id}
-                  onClick={() => navigate('/library')}
-                  className={cn(navItemClass, 'text-text-3')}
-                  title={asset.prompt || asset.filename}
-                >
-                  <Clapperboard className="size-[15px] shrink-0" />
-                  <span className="truncate">{titleFromPrompt(asset.prompt) || asset.filename}</span>
-                </button>
-              ))}
-            </NavSection>
-          ) : null}
+
         </div>
 
         <div className="border-t border-line p-3">

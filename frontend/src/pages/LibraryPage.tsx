@@ -31,6 +31,7 @@ import { Badge, Button, Dialog, DialogContent, EmptyState, Input } from '../comp
 import { useUiStore } from '../stores/ui'
 import { confirmAction } from '../stores/confirm'
 import { assetType, cn, parseMetadata } from '../lib/utils'
+import { isMusicAsset } from '../lib/musicTracks'
 import type { Asset } from '../types'
 
 
@@ -71,7 +72,7 @@ export function LibraryPage() {
       if (flags.includes('character') && !asset.character) return false
       if (flags.includes('voice') && !asset.voice) return false
       if (flags.includes('music')) {
-        if (type !== 'audio' || !(meta.source === 'yue2' || meta.is_music === true)) {
+        if (!isMusicAsset(asset)) {
           return false
         }
       }

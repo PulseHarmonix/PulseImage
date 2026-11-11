@@ -6,6 +6,7 @@ import { QueuePanel } from './QueuePanel'
 import { PromptDock } from '../prompt/PromptDock'
 import { AssetInspector } from '../media/AssetInspector'
 import { StemPanel } from '../music/StemPanel'
+import { MusicPlayerBar } from '../music/MusicPlayerBar'
 import { ConfirmDialog, Toaster } from '../ui'
 import { useUiStore } from '../../stores/ui'
 import { cn } from '../../lib/utils'
@@ -33,7 +34,13 @@ export function AppShell() {
       >
         <Menu className="size-4" />
       </button>
-      <div className={showDock ? (composerOpen ? 'pb-64' : 'pb-20') : ''}>
+      <div
+        style={{
+          paddingBottom: showDock
+            ? `calc(${composerOpen ? '16rem' : '5rem'} + var(--music-player-height, 0px))`
+            : 'var(--music-player-height, 0px)',
+        }}
+      >
         <main
           className={cn(
             'min-h-dvh pl-0 transition-[padding] duration-200',
@@ -44,6 +51,7 @@ export function AppShell() {
         </main>
       </div>
       {showDock ? <PromptDock /> : null}
+      <MusicPlayerBar />
       <QueuePanel />
       <AssetInspector />
       <StemPanel />

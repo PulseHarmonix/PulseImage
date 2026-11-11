@@ -20,6 +20,7 @@ import { apiDeleteGeneration, apiPost, mediaUrl } from '../lib/api'
 import { assetType, parseMetadata, formatDuration, uid } from '../lib/utils'
 import { assetDisplayName, watchProgress } from '../lib/assets'
 import { storedScoreView } from '../lib/musicScore'
+import { isMusicAsset } from '../lib/musicTracks'
 import type { ScoreView } from '../lib/musicScore'
 import { runSerializedGeneration } from '../lib/generationQueue'
 import { useQueueStore } from '../stores/queue'
@@ -229,11 +230,7 @@ export function MusicGeneratorPage() {
   ])
 
   const songs = useMemo(() => {
-    return (history.data ?? []).filter((asset) => {
-      if (asset.type !== 'audio') return false
-      const meta = parseMetadata(asset)
-      return meta.source === 'yue2'
-    })
+    return (history.data ?? []).filter((asset) => isMusicAsset(asset))
   }, [history.data])
 
   const insertSection = (section: string) => {

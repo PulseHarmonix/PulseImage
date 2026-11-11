@@ -24,7 +24,8 @@ from services.generation_service import (
     save_generation,
     update_generation,
     delete_generation,
-    load_generations
+    load_generations,
+    get_asset_by_id,
 )
 from services.comfy_progress import set_progress_job
 from services.video_upscale_service import (
@@ -358,6 +359,16 @@ async def update_generation_endpoint(request: Request):
             updates["character"] = bool(data.get("character"))
         if "voice" in data:
             updates["voice"] = bool(data.get("voice"))
+        if "music" in data:
+            current = get_asset_by_id(asset_id)
+            if not current:
+                return {"success": False, "error": "asset not found"}
+            metadata = dict(current.get("metadata") or {})
+            music_enabled = bool(data.get("music"))
+            metadata["is_music"] = music_enabled
+            if music_enabled:
+                metadata.setdefault("kind", "music")
+            updates["metadata"] = metadata
         if not updates:
             return {"success": False, "error": "no valid updates provided"}
         success = update_generation(asset_id, updates)

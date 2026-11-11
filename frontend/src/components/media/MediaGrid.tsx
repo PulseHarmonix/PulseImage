@@ -78,6 +78,8 @@ export function MediaCard({
   onToggleSelect?: (asset: Asset) => void
 }) {
   const openInspector = useUiStore((s) => s.openInspector)
+  const [hovered, setHovered] = useState(false)
+  const [videoFailed, setVideoFailed] = useState(false)
   const type = assetType(asset)
   const meta = parseMetadata(asset)
   const gen = meta.gen
@@ -92,6 +94,17 @@ export function MediaCard({
     }
     openInspector(asset.id)
   }
+
+  const handleMouseEnter = () => {
+    if (type !== 'video') return
+    setVideoFailed(false)
+    setHovered(true)
+  }
+
+  const handleMouseLeave = () => {
+    setHovered(false)
+  }
+
 
   const handleDoubleClick = (event: MouseEvent<HTMLButtonElement>) => {
     if (selectMode) return
@@ -112,6 +125,8 @@ export function MediaCard({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onDragStart={handleDragStart}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
       draggable
       data-asset-id={asset.id}
       className={cn(
@@ -124,7 +139,21 @@ export function MediaCard({
       {type === 'image' || type === 'video' ? (
         <>
           <LazyThumbnail src={src} alt={label} priority={priority} />
-          {type === 'video' ? (
+          {type === 'video' && hovered && !videoFailed ? (
+            <video
+              src={mediaUrl(`/videos/${asset.filename}`)}
+              poster={src}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="none"
+              aria-hidden
+              onError={() => setVideoFailed(true)}
+              className="pointer-events-none absolute inset-0 size-full object-cover transition duration-300 group-hover:scale-[1.02]"
+            />
+          ) : null}
+          {type === 'video' && !(hovered && !videoFailed) ? (
             <span className="absolute inset-0 grid place-items-center bg-black/10 opacity-0 transition group-hover:opacity-100">
               <span className="grid size-10 place-items-center rounded-full bg-black/65 text-white backdrop-blur">
                 <Play className="ml-0.5 size-4 fill-current" />
