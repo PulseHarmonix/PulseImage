@@ -788,6 +788,19 @@ async def generate_recast(data: dict) -> dict:
     try:
         prepared = await asyncio.to_thread(_prepare_source_video, options)
         duration = float(prepared["duration"])
+
+        # A source without audio must not fail after the video has already been
+        # generated. Fall back to mute and keep the recast usable.
+        if options["audio_mode"] in ("copy", "reference"):
+            has_source_audio = await asyncio.to_thread(
+                _probe_source_has_audio, options["ref_video"]
+            )
+            if not has_source_audio:
+                options["audio_mode"] = "mute"
+                prepared["warnings"].append(
+                    "Source video has no audio track; recast audio mode was changed to mute."
+                )
+
         temp_start_image = await asyncio.to_thread(_prepare_start_image, options)
         start_image_filename = temp_start_image or options["source_image"]
 

@@ -314,10 +314,6 @@ export async function runGeneration(
     const ids: string[] = []
     for (const result of results) {
       if (!result.success) throw new Error(result.error || 'Video generation failed')
-      if (result.asset_id) {
-        ids.push(result.asset_id)
-        continue
-      }
       const id = await saveGeneratedAsset(
         tab,
         result,

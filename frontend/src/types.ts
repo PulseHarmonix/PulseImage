@@ -319,7 +319,6 @@ export interface GeneratedResult {
   error?: string
   filename?: string
   local_filename?: string
-  asset_id?: string
   width?: number
   height?: number
   duration?: number
