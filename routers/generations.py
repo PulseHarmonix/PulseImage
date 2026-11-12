@@ -28,6 +28,7 @@ from services.generation_service import (
     get_asset_by_id,
 )
 from services.comfy_progress import set_progress_job
+from services.database_service import get_db
 from services.video_upscale_service import (
     maybe_upscale_video_result,
     upscale_existing_asset,
@@ -54,6 +55,48 @@ def video_reference_error(resolved_model, source_image, ref_audios, fasth3_mode)
     if resolved_model == "grok":
         return "Grok video does not support audio references."
     return None
+
+
+def _persist_recast_result(data: dict, result: dict) -> dict:
+    """Persist a completed recast on the backend as a safety net.
+
+    The composer normally saves the returned result itself. Long LTX jobs can
+    outlive the browser request, so backend persistence guarantees the finished
+    file still reaches the library even if the client disconnects.
+    """
+    filename = result.get("local_filename") or result.get("filename")
+    if not filename:
+        return result
+    try:
+        gen = dict(result.get("metadata") or {})
+        gen.update({
+            "mode": "video",
+            "resolution": data.get("resolution", "720p"),
+            "aspect_ratio": data.get("aspect_ratio", "16:9"),
+            "duration": result.get("duration"),
+            "original_prompt": data.get("prompt") or "",
+            "video_model": data.get("video_model") or "ltx",
+            "ltx_version": data.get("ltx_version"),
+            "recast": True,
+            "recast_engine": result.get("recast_engine") or data.get("recast_engine"),
+            "recast_settings": data.get("recast_settings") or {},
+            "video_upscale": data.get("video_upscale") or "off",
+            "upscale": result.get("upscale"),
+        })
+        result["asset_id"] = save_generation(
+            prompt=data.get("prompt") or "",
+            filename=filename,
+            file_type="video",
+            aspect_ratio=data.get("aspect_ratio", "16:9"),
+            width=result.get("width", 0),
+            height=result.get("height", 0),
+            duration=result.get("duration"),
+            metadata={"gen": gen},
+        )
+    except Exception as exc:
+        print(f"[RECAST] Backend library save failed: {exc}")
+        result["persist_error"] = str(exc)
+    return result
 
 
 @router.post("/generate")
@@ -105,6 +148,7 @@ async def generate(data: dict):
             result = await maybe_upscale_video_result(
                 result, job_id=job_id, requested=video_upscale, detail=upscale_detail
             )
+            result = _persist_recast_result(data, result)
             return {"success": True, "results": [result]}
         return {
             "success": False,
@@ -156,6 +200,7 @@ async def generate(data: dict):
             result = await maybe_upscale_video_result(
                 result, job_id=job_id, requested=video_upscale, detail=upscale_detail
             )
+            result = _persist_recast_result(data, result)
             return {"success": True, "results": [result]}
         elif source_image:
             set_progress_job(job_id, 0)
@@ -166,6 +211,7 @@ async def generate(data: dict):
             result = await maybe_upscale_video_result(
                 result, job_id=job_id, requested=video_upscale, detail=upscale_detail
             )
+            result = _persist_recast_result(data, result)
             return {"success": True, "results": [result]}
         else:
             set_progress_job(job_id, 0)
@@ -177,6 +223,7 @@ async def generate(data: dict):
             result = await maybe_upscale_video_result(
                 result, job_id=job_id, requested=video_upscale, detail=upscale_detail
             )
+            result = _persist_recast_result(data, result)
             return {"success": True, "results": [result]}
     else:
         if source_image and modifier_image:
@@ -388,6 +435,14 @@ async def save_generation_endpoint(request: Request):
 
         if not prompt or not filename:
             return {"success": False, "error": "prompt and filename are required"}
+
+        conn = get_db()
+        existing = conn.execute(
+            "SELECT id FROM generations WHERE filename = ? LIMIT 1", (filename,)
+        ).fetchone()
+        conn.close()
+        if existing:
+            return {"success": True, "id": existing["id"]}
 
         asset_id = save_generation(
             prompt=prompt,
