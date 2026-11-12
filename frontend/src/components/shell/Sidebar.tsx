@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   AudioLines,
+  AudioWaveform,
+  BookOpen,
   Camera,
   Frame,
   Image,
@@ -35,11 +37,13 @@ const primaryNav = [
 
 const workspaceNav = [
   { label: 'Library', icon: Library, to: '/library' },
+  { label: 'Stories', icon: BookOpen, to: '/stories' },
   { label: 'Music', icon: Music2, to: '/songs' },
   { label: 'Player', icon: ListMusic, to: '/player' },
   { label: 'Music Video', icon: AudioLines, to: '/music' },
   { label: 'Motion', icon: Camera, to: '/motion' },
   { label: 'Single Frame', icon: Frame, to: '/frames' },
+  { label: 'Video Audio', icon: AudioWaveform, to: '/video-audio' },
   { label: 'Voices', icon: Mic2, to: '/voices' },
 ]
 

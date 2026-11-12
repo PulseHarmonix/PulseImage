@@ -20,7 +20,7 @@ from typing import Optional
 
 import websockets
 
-from config import get_comfyui_url
+from config import get_comfyui_url, get_generation_idle_timeout_seconds
 
 _current_job_id: contextvars.ContextVar[str] = contextvars.ContextVar("comfy_job_id", default="")
 _current_job_index: contextvars.ContextVar[int] = contextvars.ContextVar("comfy_job_index", default=0)
@@ -65,6 +65,7 @@ class ComfyProgressTracker:
         self.queue_remaining = None
         self.started_at = time.time()
         self.updated_at = self.started_at
+        self.last_progress_at = time.monotonic()
         self._ws = None
         self._task = None
         self._watchdog = None
@@ -124,12 +125,18 @@ class ComfyProgressTracker:
             self.state = "disconnected"
             self.error = str(e)
 
+    def idle_seconds(self) -> float:
+        return max(0.0, time.monotonic() - self.last_progress_at)
+
     async def _watchdog_loop(self) -> None:
-        await asyncio.sleep(1800)
-        if self.state not in ("finished", "error"):
-            self.state = "disconnected"
-            self.error = "Progress tracker timed out"
-            await self._close_ws()
+        while self.state not in ("finished", "error"):
+            await asyncio.sleep(5)
+            idle_timeout = get_generation_idle_timeout_seconds()
+            if self.idle_seconds() > idle_timeout:
+                self.state = "error"
+                self.error = f"No progress for {idle_timeout}s"
+                await self._close_ws()
+                break
 
     async def _listen(self) -> None:
         try:
@@ -155,6 +162,9 @@ class ComfyProgressTracker:
         t = msg.get("type")
         d = msg.get("data") or {}
         self.updated_at = time.time()
+
+        if t != "status":
+            self.last_progress_at = time.monotonic()
 
         if t == "status":
             try:
@@ -231,7 +241,9 @@ class ComfyProgressTracker:
             pass
 
     async def _cleanup(self) -> None:
-        await asyncio.sleep(10)
+        # Keep the tracker around long enough for a polling loop to observe
+        # that progress stopped, even if the websocket closed early.
+        await asyncio.sleep(max(60, get_generation_idle_timeout_seconds() + 60))
         if _trackers.get(self.client_id) is self:
             _trackers.pop(self.client_id, None)
 
@@ -251,7 +263,10 @@ async def post_prompt(client, workflow: dict, stage: str = "generating"):
     ``stage`` lets the frontend distinguish generation ("generating") from the
     optional RelayVSR pass ("upscaling") while reusing the same job id.
     """
-    job_id = get_progress_job() or uuid.uuid4().hex
+    job_id = get_progress_job()
+    if not job_id:
+        job_id = uuid.uuid4().hex
+        _current_job_id.set(job_id)
     index = _current_job_index.get()
     tracker = ComfyProgressTracker(job_id, workflow, index, stage=stage)
     _trackers[job_id] = tracker
@@ -265,3 +280,19 @@ async def post_prompt(client, workflow: dict, stage: str = "generating"):
 def get_progress(job_id: str) -> Optional[dict]:
     tracker = _trackers.get(job_id)
     return tracker.snapshot() if tracker else None
+
+
+def get_progress_idle_seconds(job_id: str) -> Optional[float]:
+    """Return seconds since the last real progress event, if tracked."""
+    tracker = _trackers.get(job_id)
+    return tracker.idle_seconds() if tracker else None
+
+
+def progress_idle_timed_out(job_id: str) -> bool:
+    """Return True when the job has made no real progress for the idle timeout.
+
+    If no tracker exists (for example a caller did not set a job id), the
+    caller's own hard timeout remains responsible for stopping the wait.
+    """
+    idle = get_progress_idle_seconds(job_id)
+    return idle is not None and idle > get_generation_idle_timeout_seconds()

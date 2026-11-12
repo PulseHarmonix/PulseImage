@@ -32,6 +32,12 @@ from services.video_upscale_service import (
     maybe_upscale_video_result,
     upscale_existing_asset,
 )
+from services.recast_service import (
+    RecastError,
+    generate_recast,
+    generate_recast_with_progress,
+    validate_recast_request,
+)
 
 router = APIRouter()
 
@@ -77,6 +83,34 @@ async def generate(data: dict):
     fasth3_mode = data.get("fasth3_mode") or "reference"
     video_upscale = data.get("video_upscale")
     upscale_detail = data.get("upscale_detail")
+
+    if data.get("recast"):
+        if mode != "video":
+            return {
+                "success": False,
+                "error": "Recast requires video mode.",
+                "code": "recast_requires_video_mode",
+            }
+        try:
+            validate_recast_request(data)
+        except RecastError as exc:
+            return exc.to_dict()
+        if should_free_vram_for_video(
+            "fasth3" if data.get("recast_engine") == "fasth3" else "ltx"
+        ):
+            await free_comfyui_memory()
+        set_progress_job(job_id, 0)
+        result = await generate_recast(data)
+        if result.get("success"):
+            result = await maybe_upscale_video_result(
+                result, job_id=job_id, requested=video_upscale, detail=upscale_detail
+            )
+            return {"success": True, "results": [result]}
+        return {
+            "success": False,
+            "error": result.get("error"),
+            "code": result.get("code"),
+        }
 
     if mode == "video" and duration:
         resolved_model = resolve_video_model(video_model)
@@ -192,6 +226,36 @@ async def generate_stream(data: dict):
     fasth3_mode = data.get("fasth3_mode") or "reference"
     video_upscale = data.get("video_upscale")
     upscale_detail = data.get("upscale_detail")
+
+    if data.get("recast"):
+        if mode != "video":
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "Recast requires video mode.",
+                    "code": "recast_requires_video_mode",
+                },
+                status_code=400,
+            )
+        try:
+            validate_recast_request(data)
+        except RecastError as exc:
+            return JSONResponse(exc.to_dict(), status_code=exc.status_code)
+        if should_free_vram_for_video(
+            "fasth3" if data.get("recast_engine") == "fasth3" else "ltx"
+        ):
+            await free_comfyui_memory()
+        recast_count = count if count else 1
+        return StreamingResponse(
+            generate_recast_with_progress(
+                data,
+                count=recast_count,
+                job_id=job_id,
+                video_upscale=video_upscale,
+                upscale_detail=upscale_detail,
+            ),
+            media_type="text/event-stream",
+        )
 
     if not prompt:
         return JSONResponse({"success": False, "error": "Prompt required"}, status_code=400)

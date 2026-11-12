@@ -14,9 +14,14 @@ from typing import Optional
 
 import httpx
 
-from config import get_comfyui_url, load_app_settings
+from config import (
+    get_comfyui_url,
+    get_generation_idle_timeout_seconds,
+    get_generation_max_timeout_seconds,
+    load_app_settings,
+)
 from services.comfy_service import download_and_save_video, free_comfyui_memory
-from services.comfy_progress import post_prompt, set_progress_job
+from services.comfy_progress import get_progress_job, post_prompt, progress_idle_timed_out, set_progress_job
 from services.video_frame_service import probe_video
 from utils.video_workflow_utils import (
     load_base_recavsr_workflow,
@@ -396,10 +401,14 @@ async def upscale_video_relayvsr(
 
             print(f"[RelayVSR] Queued. Prompt ID: {prompt_id}")
             video_info = None
-            deadline = time.monotonic() + timeout_val
+            deadline = time.monotonic() + (get_generation_max_timeout_seconds() or 86400)
 
             while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
+                if progress_idle_timed_out(get_progress_job()):
+                    return _failure(
+                        f"Upscaling timed out: no progress for {get_generation_idle_timeout_seconds()}s"
+                    )
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
                     if prompt_id in history:
@@ -547,10 +556,14 @@ async def upscale_video_recavsr(
 
             print(f"[ReCaVSR] Queued. Prompt ID: {prompt_id}")
             video_info = None
-            deadline = time.monotonic() + timeout_val
+            deadline = time.monotonic() + (get_generation_max_timeout_seconds() or 86400)
 
             while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
+                if progress_idle_timed_out(get_progress_job()):
+                    return _failure(
+                        f"Upscaling timed out: no progress for {get_generation_idle_timeout_seconds()}s"
+                    )
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
                     if prompt_id in history:

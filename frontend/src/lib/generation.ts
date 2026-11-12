@@ -1,5 +1,11 @@
 import { apiGet, apiPost } from './api'
 import { uid } from './utils'
+import {
+  isRecastActive,
+  recastEngineForTab,
+  recastModelPatch,
+  recastSettingsOf,
+} from './recast'
 import type {
   AppSettings,
   GeneratedResult,
@@ -42,11 +48,19 @@ function metadataFor(
   settings?: AppSettings,
 ): GenMetadata {
   const images = tab.attachments
-    .filter((a) => a.type === 'image' || a.type === 'video')
+    .filter((a) => a.type === 'image')
     .map((a) => ({ id: a.id || '', name: a.name, type: 'image' as const }))
+  const videos = tab.attachments
+    .filter((a) => a.type === 'video')
+    .map((a) => ({ id: a.id || '', name: a.name, type: 'video' as const }))
   const audios = tab.attachments
     .filter((a) => a.type === 'audio' || a.type === 'voice')
     .map((a) => ({ id: a.id || '', name: a.name, type: 'audio' as const }))
+
+  const recast = isRecastActive(tab)
+  const recastEngine = recast ? recastEngineForTab(tab) : null
+  const recastModel = recastEngine ? recastModelPatch(recastEngine) : null
+  const sourceVideo = videos[0]
 
   const metadata: GenMetadata = {
     mode: tab.mode,
@@ -61,11 +75,31 @@ function metadataFor(
       tab.mode === 'image' && tab.attachments.some((a) => a.type === 'image')
         ? tab.i2iModel
         : undefined,
-    video_model: tab.mode === 'video' ? tab.videoModel : undefined,
+    video_model:
+      tab.mode === 'video'
+        ? recastModel?.videoModel ?? tab.videoModel
+        : undefined,
     ltx_version:
-      tab.mode === 'video' && tab.videoModel === 'ltx' ? tab.ltxVersion : undefined,
+      tab.mode === 'video'
+        ? recast
+          ? recastModel?.ltxVersion
+          : tab.videoModel === 'ltx'
+            ? tab.ltxVersion
+            : undefined
+        : undefined,
     fasth3_mode:
-      tab.mode === 'video' && tab.videoModel === 'fasth3' ? tab.fasth3Mode : undefined,
+      tab.mode === 'video'
+        ? recast
+          ? recastModel?.fasth3Mode
+          : tab.videoModel === 'fasth3'
+            ? tab.fasth3Mode
+            : undefined
+        : undefined,
+    recast: recast ? true : undefined,
+    recast_engine: recastEngine ?? undefined,
+    ref_video: recast ? sourceVideo?.name : undefined,
+    source_image: recast ? images[0]?.name : undefined,
+    recast_settings: recast ? recastSettingsOf(tab) : undefined,
     video_upscale: (upscale ?? Boolean(tab.upscale))
       ? activeUpscaleEngine(settings)
       : 'off',
@@ -73,6 +107,7 @@ function metadataFor(
     attachments: {
       images,
       audios,
+      videos,
       audio: audios[0] || null,
       lora: tab.attachments.find((a) => a.type === 'lora') || null,
     },
@@ -239,16 +274,30 @@ export async function runGeneration(
       return ids
     }
 
+    const videos = tab.attachments.filter((a) => a.type === 'video')
+    const recast = isRecastActive(tab)
+    const recastEngine = recast ? recastEngineForTab(tab) : null
+    const recastModel = recastEngine ? recastModelPatch(recastEngine) : null
+
     body.duration = tab.duration
-    body.video_model = tab.videoModel
-    body.ltx_version = tab.ltxVersion
-    body.fasth3_mode = tab.fasth3Mode
+    body.video_model = recastModel?.videoModel ?? tab.videoModel
+    body.ltx_version = recastModel?.ltxVersion ?? tab.ltxVersion
+    body.fasth3_mode = recastModel?.fasth3Mode ?? tab.fasth3Mode
     body.video_upscale = upscale ? activeUpscaleEngine(settings) : 'off'
-    if (images[0]) body.source_image = images[0].name
-    if (images.length > 1 || (tab.videoModel === 'fasth3' && audios.length > 1)) {
-      body.ref_images = images.map((image) => image.name)
+    if (recast && videos[0]) {
+      body.recast = true
+      body.recast_engine = recastEngine
+      body.ref_video = videos[0].name
+      if (images[0]) body.source_image = images[0].name
+      body.ref_images = images.slice(1).map((image) => image.name)
+      body.recast_settings = recastSettingsOf(tab)
+    } else {
+      if (images[0]) body.source_image = images[0].name
+      if (images.length > 1 || (tab.videoModel === 'fasth3' && audios.length > 1)) {
+        body.ref_images = images.map((image) => image.name)
+      }
     }
-    if (audios.length) {
+    if (!recast && audios.length) {
       body.ref_audios = audios.map((audio) => audio.name)
       body.modifier_audio = audios[0].name
     }

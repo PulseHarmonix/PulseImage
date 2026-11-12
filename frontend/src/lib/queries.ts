@@ -1,6 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from './api'
-import type { AppSettings, Asset, ReCaVSRStatus, RelayStatus, TtsEngine } from '../types'
+import type {
+  AppSettings,
+  Asset,
+  ReCaVSRStatus,
+  RelayStatus,
+  StoryDetail,
+  StorySummary,
+  TtsEngine,
+} from '../types'
 
 export const queryKeys = {
   history: ['history'] as const,
@@ -11,6 +19,9 @@ export const queryKeys = {
   songCapabilities: ['songs', 'capabilities'] as const,
   stemCapabilities: ['stems', 'capabilities'] as const,
   capabilities: ['comfy', 'capabilities'] as const,
+  characters: ['characters'] as const,
+  stories: ['stories'] as const,
+  story: (id: string) => ['stories', id] as const,
 }
 
 export function useHistory() {
@@ -112,5 +123,36 @@ export function useRelayCapabilities() {
       return response
     },
     staleTime: 20_000,
+  })
+}
+
+export function useCharacters() {
+  return useQuery({
+    queryKey: queryKeys.characters,
+    queryFn: async () => {
+      const response = await apiGet<{ characters?: Asset[] }>('/characters')
+      return response.characters ?? []
+    },
+    staleTime: 10_000,
+  })
+}
+
+export function useStories() {
+  return useQuery({
+    queryKey: queryKeys.stories,
+    queryFn: async () => {
+      const response = await apiGet<{ stories?: StorySummary[] }>('/stories')
+      return response.stories ?? []
+    },
+    staleTime: 5_000,
+  })
+}
+
+export function useStory(id?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.story(id ?? ''),
+    queryFn: () => apiGet<StoryDetail>(`/stories/${id}`),
+    enabled: Boolean(id),
+    staleTime: 5_000,
   })
 }

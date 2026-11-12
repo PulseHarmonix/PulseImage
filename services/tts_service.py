@@ -7,14 +7,14 @@ import uuid
 
 import httpx
 
-from config import get_comfyui_url, get_failed_gen_clear_seconds, load_app_settings
+from config import get_comfyui_url, get_generation_idle_timeout_seconds, get_generation_max_attempts, load_app_settings
 from services.audio_service import (
     AudioError,
     delete_audio,
     get_audio_duration,
     trim_audio,
 )
-from services.comfy_progress import post_prompt, set_progress_job
+from services.comfy_progress import get_progress_job, post_prompt, progress_idle_timed_out, set_progress_job
 from services.comfy_service import upload_audio_to_comfy
 from services.generation_service import (
     get_asset_by_id,
@@ -628,7 +628,8 @@ async def _run_asr_to_input(
 ) -> str | None:
     """Transcribe the reference and write <name>.txt next to it in ComfyUI input."""
     workflow = build_asr_workflow(comfy_audio_name, txt_filename, language)
-    set_progress_job("", 0)
+    asr_job_id = uuid.uuid4().hex
+    set_progress_job(asr_job_id, 0)
     async with httpx.AsyncClient(timeout=600.0) as client:
         res = await post_prompt(client, workflow)
         if res.status_code != 200:
@@ -641,9 +642,11 @@ async def _run_asr_to_input(
         if not prompt_id:
             return "ASR failed: no prompt_id"
 
-        max_attempts = min(300, get_failed_gen_clear_seconds())
+        max_attempts = get_generation_max_attempts()
         for _attempt in range(max_attempts):
             await asyncio.sleep(1)
+            if progress_idle_timed_out(asr_job_id):
+                return f"ASR timed out: no progress for {get_generation_idle_timeout_seconds()}s"
             try:
                 history = (
                     await client.get(f"{get_comfyui_url()}/history/{prompt_id}")
@@ -817,10 +820,12 @@ async def generate_speech(
             if not prompt_id:
                 return {"success": False, "error": "No prompt_id"}
 
-            max_attempts = get_failed_gen_clear_seconds()
+            max_attempts = get_generation_max_attempts()
             audio_info = None
             for _attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    return {"success": False, "error": f"Speech generation timed out: no progress for {get_generation_idle_timeout_seconds()}s"}
                 try:
                     history = (
                         await client.get(f"{get_comfyui_url()}/history/{prompt_id}")

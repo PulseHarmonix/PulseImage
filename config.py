@@ -23,6 +23,8 @@ def _get_defaults() -> dict:
         "ollama_timeout": 180,
         "xai_api_key": "",
         "failed_gen_clear_seconds": 600,
+        "generation_idle_timeout_seconds": 600,
+        "generation_max_timeout_seconds": 0,
         "tts_engine": "qwen3",
         "tts_qwen3_model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         "tts_qwen3_download_source": "HuggingFace",
@@ -109,8 +111,15 @@ def _apply_defaults(s: dict) -> dict:
             s[key] = default_val
         elif key in ("comfyui_url", "ollama_url", "ollama_model") and (not isinstance(s[key], str) or not s[key].strip()):
             s[key] = default_val
-        elif key in ("ollama_timeout", "failed_gen_clear_seconds") and (not isinstance(s[key], (int, float)) or s[key] <= 0):
+        elif key in ("ollama_timeout", "failed_gen_clear_seconds", "generation_idle_timeout_seconds") and (
+            not isinstance(s[key], (int, float)) or s[key] <= 0
+        ):
             s[key] = default_val
+        elif key == "generation_max_timeout_seconds":
+            try:
+                s[key] = max(0, int(s[key]))
+            except (TypeError, ValueError):
+                s[key] = default_val
         elif key == "tts_engine" and s[key] not in ("qwen3", "chatterbox", "cosyvoice3", "indextts25", "f5tts", "xttsv2", "zonos2", "gpt_sovits"):
             s[key] = default_val
         elif key == "tts_qwen3_model" and (not isinstance(s[key], str) or not s[key].strip()):
@@ -200,10 +209,7 @@ def ensure_settings_in_db() -> None:
 
 
 def get_failed_gen_clear_seconds() -> int:
-    """Return the configured timeout (in seconds) before a generation is considered failed.
-    This value is used as the loop bound (with 1s sleep) for history polling in comfy_service.py
-    for both image and video generation paths (T2I, I2I, T2V, I2V, IA2V, etc.).
-    """
+    """Return the configured timeout before a generation is considered failed."""
     s = load_app_settings()
     try:
         val = s.get("failed_gen_clear_seconds", 600)
@@ -211,4 +217,33 @@ def get_failed_gen_clear_seconds() -> int:
         return val if val > 0 else 600
     except Exception:
         return 600
+
+
+def get_generation_idle_timeout_seconds() -> int:
+    """Return the idle timeout for ComfyUI generation progress.
+
+    The timer is reset whenever the current prompt reports new progress. A
+    slow task may run as long as it keeps making progress.
+    """
+    s = load_app_settings()
+    try:
+        val = int(s.get("generation_idle_timeout_seconds", 600))
+        return val if val > 0 else 600
+    except Exception:
+        return 600
+
+
+def get_generation_max_timeout_seconds() -> int:
+    """Return an optional hard cap, or 0 for no hard cap."""
+    s = load_app_settings()
+    try:
+        return max(0, int(s.get("generation_max_timeout_seconds", 0)))
+    except Exception:
+        return 0
+
+
+def get_generation_max_attempts() -> int:
+    """Return a safety loop bound for 1s polling when no hard cap is configured."""
+    max_seconds = get_generation_max_timeout_seconds()
+    return max_seconds if max_seconds > 0 else 86400
 

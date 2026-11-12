@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Attachment, AudioMode, PromptMode, PromptTab, SpeechConfig } from '../types'
 import { uid } from '../lib/utils'
+import { defaultRecastSettings } from '../lib/recast'
 
 export function defaultSpeechConfig(engine = 'qwen3'): SpeechConfig {
   return {
@@ -33,6 +34,7 @@ export function createPromptTab(index = 1, overrides: Partial<PromptTab> = {}): 
     audio: 'auto' as AudioMode,
     attachments: [],
     speech: defaultSpeechConfig(),
+    recastSettings: defaultRecastSettings(),
     ...overrides,
   }
 }

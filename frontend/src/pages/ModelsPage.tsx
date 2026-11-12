@@ -32,7 +32,7 @@ const imageModels = ['schnell', 'klein', 'qwen', 'grok', 'grok-quality']
 const editModels = ['klein', 'flux2', 'grok', 'grok-quality']
 const videoModels = ['ltx', 'fasth3', 'grok']
 
-type ModelCategory = 'checkpoints' | 'loras' | 'vaes' | 'clips' | 'upscalers'
+type ModelCategory = 'checkpoints' | 'loras' | 'vaes' | 'clips' | 'upscalers' | 'audio' | 'recavsr'
 
 const REQUIRED_WORKFLOW_MODELS: Record<ModelCategory, string[]> = {
   checkpoints: [
@@ -42,6 +42,10 @@ const REQUIRED_WORKFLOW_MODELS: Record<ModelCategory, string[]> = {
     'flux2_dev_fp8mixed.safetensors',
     'flux1-schnell.safetensors',
     'qwen_image_2512_fp8_e4m3fn.safetensors',
+    'ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors',
+    'fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors',
+    'fasth3_omniref_8step_pruned_int8_convrot.safetensors',
+    'yue2_3b_int8_convrot.safetensors',
     'relayvsr_x2_lightx2v_int8_convrot.safetensors',
   ],
   loras: [
@@ -50,11 +54,16 @@ const REQUIRED_WORKFLOW_MODELS: Record<ModelCategory, string[]> = {
     'ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors',
     'gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors',
     'Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors',
+    'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
   ],
   vaes: [
     'full_encoder_small_decoder.safetensors',
     'ae.safetensors',
     'qwen_image_vae.safetensors',
+    'ltx-2.5-video-vae-bf16.safetensors',
+    'ltx-2.5-audio-vae-bf16.safetensors',
+    'minimax_h3_video_vae_int8_convrot.safetensors',
+    'minimax_h3_audio_vae_fp32.safetensors',
     'relayvsr_flash_vae_x2_fp32.safetensors',
   ],
   clips: [
@@ -64,10 +73,21 @@ const REQUIRED_WORKFLOW_MODELS: Record<ModelCategory, string[]> = {
     'clip_l.safetensors',
     'qwen_2.5_vl_7b_fp8_scaled.safetensors',
     'gemma_3_12B_it_fp4_mixed.safetensors',
+    'gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors',
+    'gemma4_e2b_it_int8_convrot.safetensors',
+    'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
   ],
   upscalers: [
     'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
     'ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors',
+  ],
+  audio: [
+    'sheetsage2_bf16.safetensors',
+  ],
+  recavsr: [
+    'transformer_int8_convrot.safetensors',
+    'prompt.safetensors',
+    'flashdecoder.safetensors',
   ],
 }
 
@@ -77,6 +97,8 @@ const categoryLabels: Record<ModelCategory, string> = {
   vaes: 'VAEs',
   clips: 'CLIP / Text encoders',
   upscalers: 'Upscalers',
+  audio: 'Audio encoders',
+  recavsr: 'ReCaVSR assets',
 }
 
 interface ComfyModels {
@@ -86,6 +108,8 @@ interface ComfyModels {
   vaes?: string[]
   clips?: string[]
   upscalers?: string[]
+  audio?: string[]
+  recavsr?: string[]
   error?: string
 }
 
@@ -95,6 +119,8 @@ const emptyModels: ComfyModels = {
   vaes: [],
   clips: [],
   upscalers: [],
+  audio: [],
+  recavsr: [],
 }
 
 export function ModelsPage() {
@@ -411,6 +437,8 @@ export function ModelsPage() {
             <AssetCount label="VAEs" count={models.vaes?.length} />
             <AssetCount label="CLIPs" count={models.clips?.length} />
             <AssetCount label="Upscalers" count={models.upscalers?.length} />
+            <AssetCount label="Audio encoders" count={models.audio?.length} />
+            <AssetCount label="ReCaVSR assets" count={models.recavsr?.length} />
           </div>
         </Panel>
         <Panel icon={<Layers3 className="size-4" />} title="Stems" subtitle="Audio stem separation">

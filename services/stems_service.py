@@ -15,9 +15,9 @@ import uuid
 
 import httpx
 
-from config import get_comfyui_url
+from config import get_comfyui_url, get_generation_idle_timeout_seconds, get_generation_max_timeout_seconds
 from services.audio_service import audio_path, delete_audio, get_audio_duration
-from services.comfy_progress import post_prompt, set_progress_job
+from services.comfy_progress import post_prompt, progress_idle_timed_out, set_progress_job
 from services.comfy_service import upload_audio_to_comfy
 from services.database_service import get_db
 from services.generation_service import delete_generation, get_asset_by_id, save_generation
@@ -412,9 +412,11 @@ async def _run_separation(workflow: dict, job_id: str) -> tuple[dict | None, str
             if not prompt_id:
                 return None, "No prompt_id returned by ComfyUI"
 
-            deadline = time.monotonic() + SEPARATION_TIMEOUT_SECONDS
+            deadline = time.monotonic() + (get_generation_max_timeout_seconds() or 86400)
             while time.monotonic() < deadline:
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(job_id):
+                    return None, f"Stem separation timed out: no progress for {get_generation_idle_timeout_seconds()}s"
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
                 except Exception:

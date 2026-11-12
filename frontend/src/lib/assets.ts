@@ -18,6 +18,7 @@ export interface AssetDragPayload {
   aspect: number
   id: string
   prompt: string
+  duration?: number
   voice: boolean
 }
 
@@ -43,6 +44,18 @@ export function assetDisplayName(asset: Asset): string {
   return promptTitle !== 'Untitled generation' ? promptTitle : asset.filename
 }
 
+export function assetDuration(asset: Asset): number | undefined {
+  if (typeof asset.duration === 'number' && Number.isFinite(asset.duration)) {
+    return asset.duration
+  }
+  const meta = parseMetadata(asset)
+  if (typeof meta.duration === 'number' && Number.isFinite(meta.duration)) {
+    return meta.duration
+  }
+  const genDuration = parseGen(asset)?.duration
+  return typeof genDuration === 'number' && Number.isFinite(genDuration) ? genDuration : undefined
+}
+
 export function toAttachment(asset: Asset): Attachment {
   const type = assetType(asset)
   const aspect = asset.width && asset.height ? asset.width / asset.height : undefined
@@ -54,6 +67,7 @@ export function toAttachment(asset: Asset): Attachment {
     src: mediaUrl(assetUrl(asset)),
     prompt: asset.prompt || '',
     aspect: aspect && Number.isFinite(aspect) ? aspect : undefined,
+    duration: assetDuration(asset),
     voice: Boolean(asset.voice),
   }
 }
@@ -71,6 +85,7 @@ export function dragPayload(asset: Asset): AssetDragPayload {
     aspect: Number.isFinite(aspect) && aspect > 0 ? aspect : 1.5,
     id: asset.id || '',
     prompt: (asset.prompt || '').trim(),
+    duration: assetDuration(asset),
     voice: Boolean(asset.voice),
   }
 }
@@ -100,7 +115,7 @@ export function assetAspect(asset: Asset, gen?: GenMetadata): string {
 function findAssetRef(
   ref: Attachment | null | undefined,
   assets: Asset[],
-  type: 'image' | 'audio',
+  type: 'image' | 'audio' | 'video',
 ): Asset | undefined {
   if (!ref) return undefined
   if (ref.id) {
@@ -111,8 +126,7 @@ function findAssetRef(
   if (!name) return undefined
   const base = name.split('/').pop()
   return assets.find((asset) => {
-    if (type === 'image' && assetType(asset) !== 'image') return false
-    if (type === 'audio' && assetType(asset) !== 'audio') return false
+    if (assetType(asset) !== type) return false
     return asset.filename === name || asset.filename === base
   })
 }
@@ -122,12 +136,13 @@ export function attachmentsFromGen(
   assets: Asset[],
 ): Attachment[] {
   if (!gen?.attachments) return []
-  const { images, audios, audio, lora } = gen.attachments
+  const { images, audios, videos, audio, lora } = gen.attachments
   const imageRefs = Array.isArray(images) ? images.filter(Boolean) : []
+  const videoRefs = Array.isArray(videos) ? videos.filter(Boolean) : []
   let audioRefs = Array.isArray(audios) ? audios.filter(Boolean) : []
   if (!audioRefs.length && audio) audioRefs = [audio]
 
-  if (lora?.name && !imageRefs.length && !audioRefs.length) {
+  if (lora?.name && !imageRefs.length && !videoRefs.length && !audioRefs.length) {
     return [{ id: lora.id, name: lora.name, type: 'lora', prompt: lora.prompt }]
   }
 
@@ -138,6 +153,22 @@ export function attachmentsFromGen(
     if (seen.has(key)) return
     seen.add(key)
     result.push(attachment)
+  }
+
+  for (const ref of videoRefs) {
+    const asset = findAssetRef(ref, assets, 'video')
+    if (asset) {
+      push(toAttachment(asset))
+    } else if (ref.name) {
+      push({
+        id: ref.id,
+        name: ref.name,
+        type: 'video',
+        src: mediaUrl(`/videos/${ref.name}`),
+        prompt: ref.prompt,
+        duration: ref.duration,
+      })
+    }
   }
 
   for (const ref of imageRefs) {

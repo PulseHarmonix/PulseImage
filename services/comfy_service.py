@@ -6,7 +6,13 @@ import json
 import asyncio
 import time
 
-from services.comfy_progress import post_prompt, set_progress_job
+from services.comfy_progress import (
+    get_progress_job,
+    post_prompt,
+    progress_idle_timed_out,
+    set_progress_job,
+)
+from config import get_generation_idle_timeout_seconds, get_generation_max_attempts
 
 from typing import Optional, AsyncGenerator
 
@@ -35,6 +41,7 @@ from utils.workflow_utils import (
 from utils.video_workflow_utils import (
     load_base_video_workflow,
     modify_video_workflow,
+    get_ltx_recast_dimensions,
     get_video_dimensions,
     load_base_image_to_video_workflow,
     modify_image_to_video_workflow,
@@ -58,6 +65,10 @@ from utils.video_workflow_utils import (
     modify_fasth3_multi_ref_workflow,
     load_base_fasth3_multi_ref_guide_workflow,
     modify_fasth3_multi_ref_guide_workflow,
+    load_base_ltx23_recast_workflow,
+    modify_ltx23_recast_workflow,
+    load_base_ltx25_recast_workflow,
+    modify_ltx25_recast_workflow,
 )
 
 IMAGES_FOLDER = "images"
@@ -197,7 +208,8 @@ async def fetch_loras_from_comfy() -> list[str]:
 async def fetch_comfy_models() -> dict:
     """Query ComfyUI for available models across common categories.
 
-    Returns a dict with keys: checkpoints, loras, vaes, clips, upscalers.
+    Returns a dict with keys: checkpoints, loras, vaes, clips, upscalers,
+    audio encoders, and ReCaVSR assets.
     Each value is a list of model filenames (strings).
     On failure, returns empty lists for all categories.
     """
@@ -209,6 +221,8 @@ async def fetch_comfy_models() -> dict:
         "vaes": "vae",
         "clips": "clip",
         "upscalers": "upscale_models",
+        "audio": "audio_encoders",
+        "recavsr": "recavsr",
         # unet often lives under checkpoints or unet folder; we fold into checkpoints for simplicity
     }
     result = {cat: [] for cat in category_map.keys()}
@@ -392,15 +406,15 @@ async def download_and_save_image(filename: str, subfolder: str = "") -> str | N
                 with open(filepath, "wb") as f:
                     f.write(response.content)
 
-                print(f"✅ Successfully saved image as: {new_filename}")
+                print(f" Successfully saved image as: {new_filename}")
                 return new_filename
             else:
-                print(f"❌ Failed to download. Status: {response.status_code}")
+                print(f" Failed to download. Status: {response.status_code}")
                 print(f"Response text: {response.text[:200]}")
                 return None
 
     except Exception as e:
-        print(f"❌ Exception while downloading image: {e}")
+        print(f" Exception while downloading image: {e}")
         return None
 
 
@@ -444,20 +458,26 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
                 return {"success": False, "error": "No prompt_id"}
 
             # Poll history until outputs are ready.
-            # Uses failed_gen_clear_seconds from settings (read at call time) as the max attempts (1s sleep each).
+            # Poll until the output appears. The idle timeout resets on progress; a safety loop bound prevents an infinite wait.
             # Dynamically find the SaveImage node output (node ID varies by workflow:
             # "9" for Flux Schnell/Klein, "60" for Qwen, etc.). This avoids hard-coded
             # node assumptions that broke Qwen retrieval.
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
+                max_attempts = get_generation_max_attempts()
             outputs = {}
             images = []
             for attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
                 try:
                     history_res = await client.get(f"{get_comfyui_url()}/history/{prompt_id}")
                     history = history_res.json()
@@ -488,7 +508,7 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
             )
 
             if local_filename:
-                print(f"✅ Image saved: {local_filename}")
+                print(f" Image saved: {local_filename}")
                 return {
                     "success": True,
                     "local_filename": local_filename,
@@ -499,7 +519,7 @@ async def generate_single_image(prompt: str, resolution: str, aspect_ratio: str,
                 return {"success": False, "error": "Download failed"}
 
     except Exception as e:
-        print(f"❌ Error in generate_single_image: {e}")
+        print(f" Error in generate_single_image: {e}")
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
@@ -652,7 +672,7 @@ async def upload_image_to_comfy(local_filename: str) -> str | None:
                 if response.status_code == 200:
                     data = response.json()
                     comfy_name = data.get("name")
-                    print(f"[I2V] ✅ Uploaded as Comfy input: {comfy_name}")
+                    print(f"[I2V]  Uploaded as Comfy input: {comfy_name}")
                     return comfy_name
                 else:
                     print(f"[I2V] Upload failed {response.status_code}: {response.text}")
@@ -847,12 +867,18 @@ async def generate_single_video(
 
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
+                max_attempts = get_generation_max_attempts()
             for attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
 
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
@@ -883,7 +909,7 @@ async def generate_single_video(
                         print(f"[VIDEO] Polling warning: {e}")
 
             if not video_info:
-                print("[VIDEO] ❌ No video file found after polling")
+                print("[VIDEO]  No video file found after polling")
                 return {"success": False, "error": "No video output found"}
 
             # Download the video
@@ -893,7 +919,7 @@ async def generate_single_video(
             )
 
             if local_filename:
-                print(f"[VIDEO] ✅ Successfully saved: {local_filename}")
+                print(f"[VIDEO]  Successfully saved: {local_filename}")
                 return {
                     "success": True,
                     "local_filename": local_filename,
@@ -992,12 +1018,18 @@ async def generate_single_image_to_video(
 
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
+                max_attempts = get_generation_max_attempts()
             for attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
 
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
@@ -1027,7 +1059,7 @@ async def generate_single_image_to_video(
                         print(f"[I2V] Polling warning: {e}")
 
             if not video_info:
-                print("[I2V] ❌ No video file found after polling")
+                print("[I2V]  No video file found after polling")
                 return {"success": False, "error": "No video output found"}
 
             # Download the video (reuse existing helper)
@@ -1037,7 +1069,7 @@ async def generate_single_image_to_video(
             )
 
             if local_filename:
-                print(f"[I2V] ✅ Successfully saved: {local_filename}")
+                print(f"[I2V]  Successfully saved: {local_filename}")
                 return {
                     "success": True,
                     "local_filename": local_filename,
@@ -1123,12 +1155,18 @@ async def generate_single_image_audio_to_video(
 
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
+                max_attempts = get_generation_max_attempts()
             for attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
 
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
@@ -1158,7 +1196,7 @@ async def generate_single_image_audio_to_video(
                         print(f"[IA2V] Polling warning: {e}")
 
             if not video_info:
-                print("[IA2V] ❌ No video file found after polling")
+                print("[IA2V]  No video file found after polling")
                 return {"success": False, "error": "No video output found"}
 
             # Download the video (reuse existing helper)
@@ -1168,7 +1206,7 @@ async def generate_single_image_audio_to_video(
             )
 
             if local_filename:
-                print(f"[IA2V] ✅ Successfully saved: {local_filename}")
+                print(f"[IA2V]  Successfully saved: {local_filename}")
                 return {
                     "success": True,
                     "local_filename": local_filename,
@@ -1199,6 +1237,9 @@ async def generate_fasth3_multi_ref_video(
     audio_mode: str = "voice",
     ref_video_filename: str | None = None,
     ref_image_size: str = "max",
+    video_reference_mode: str = "continuity",
+    recast_preserve: list | None = None,
+    start_image_mode: str | None = None,
 ) -> dict:
     """Generate a FastH3 video from multiple reference images and audio clips.
 
@@ -1206,7 +1247,8 @@ async def generate_fasth3_multi_ref_video(
     (used by Music Video) is unaffected. When ``first_frame_filename`` is set a
     frame-0 image guide is added on top of the same multi-reference graph. When
     ``ref_video_filename`` is set the clip is used as a motion-continuity
-    reference video.
+    reference video. ``video_reference_mode="recast"`` switches the prompt and
+    treats the clip as a performance reference instead of a follow-on.
     """
     print("\n>>> [FASTH3 MULTI-REF] generate_fasth3_multi_ref_video started")
     prompt_id = None
@@ -1225,7 +1267,7 @@ async def generate_fasth3_multi_ref_video(
                 return {"success": False, "error": f"Failed to upload reference audio: {fn}"}
             audio_names.append(name)
 
-        if not image_names and not audio_names:
+        if not image_names and not audio_names and not first_frame_filename and not ref_video_filename:
             return {"success": False, "error": "No references supplied"}
 
         comfy_first_frame_name = None
@@ -1263,6 +1305,9 @@ async def generate_fasth3_multi_ref_video(
                 audio_mode=audio_mode,
                 ref_video_filename=comfy_ref_video_name,
                 ref_image_size=ref_image_size,
+                video_reference_mode=video_reference_mode,
+                recast_preserve=recast_preserve,
+                start_image_mode=start_image_mode,
             )
         else:
             base_workflow = load_base_fasth3_multi_ref_workflow()
@@ -1279,6 +1324,9 @@ async def generate_fasth3_multi_ref_video(
                 audio_mode=audio_mode,
                 ref_video_filename=comfy_ref_video_name,
                 ref_image_size=ref_image_size,
+                video_reference_mode=video_reference_mode,
+                recast_preserve=recast_preserve,
+                start_image_mode=start_image_mode,
             )
         save_node = "92"
 
@@ -1292,12 +1340,18 @@ async def generate_fasth3_multi_ref_video(
 
             video_info = None
             try:
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
+                max_attempts = get_generation_max_attempts()
             for attempt in range(max_attempts):
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
                     if prompt_id in history:
@@ -1319,7 +1373,7 @@ async def generate_fasth3_multi_ref_video(
                         print(f"[FASTH3 MULTI-REF] Polling warning: {e}")
 
             if not video_info:
-                print("[FASTH3 MULTI-REF] ❌ No video file found after polling; interrupting ComfyUI job")
+                print("[FASTH3 MULTI-REF]  No video file found after polling; interrupting ComfyUI job")
                 await interrupt_comfy_prompt(prompt_id)
                 return {"success": False, "error": "No video output found"}
 
@@ -1339,6 +1393,185 @@ async def generate_fasth3_multi_ref_video(
 
     except Exception as e:
         print(f"[FASTH3 MULTI-REF] Critical error: {e}")
+        import traceback
+        traceback.print_exc()
+        if prompt_id:
+            await interrupt_comfy_prompt(prompt_id)
+        return {"success": False, "error": str(e)}
+
+
+async def generate_ltx_recast_video(
+    engine: str,
+    ref_video_filename: str,
+    source_image_filename: str,
+    prompt: str,
+    resolution: str,
+    aspect_ratio: str,
+    duration: float,
+    start_image_mode: str = "first_frame_identity",
+    extra_ref_filenames: list | None = None,
+    guide_strength: float = 0.5,
+    reference_fit: str = "pad",
+    source_control: str = "canny",
+    control_attention_strength: float = 0.8,
+    start_image_strength: float = 1.0,
+    ref_image_strength: float = 0.8,
+    seed: int | None = None,
+    negative_prompt: str = "",
+    prompt_enhance: bool = False,
+    sampler_name: str = "",
+    audio_filename: str | None = None,
+) -> dict:
+    """Generate an experimental local LTX recast video.
+
+    ``engine`` is ``ltx23`` or ``ltx25``. The source video is uploaded as an
+    IC-LoRA video guide; the starting image is used as an identity/first-frame
+    guide. Each LTX version uses its own workflow graph.
+    """
+    print(f"\n>>> [LTX RECAST] generate_ltx_recast_video started ({engine})")
+    prompt_id = None
+    try:
+        comfy_video_name = await upload_video_to_comfy(ref_video_filename)
+        if not comfy_video_name:
+            return {"success": False, "error": "Failed to upload source video"}
+
+        comfy_image_name = await upload_image_to_comfy(source_image_filename)
+        if not comfy_image_name:
+            return {"success": False, "error": "Failed to upload starting image"}
+
+        extra_names = []
+        for filename in (extra_ref_filenames or [])[:5]:
+            name = await upload_image_to_comfy(filename)
+            if not name:
+                return {"success": False, "error": f"Failed to upload reference image: {filename}"}
+            extra_names.append(name)
+
+        comfy_audio_name = None
+        if audio_filename:
+            comfy_audio_name = await upload_audio_to_comfy(audio_filename)
+            if not comfy_audio_name:
+                return {"success": False, "error": "Failed to upload source audio"}
+
+        width, height = get_ltx_recast_dimensions(resolution, aspect_ratio)
+        common = dict(
+            start_image_mode=start_image_mode,
+            guide_strength=guide_strength,
+            extra_image_filenames=extra_names,
+            source_control=source_control,
+            control_attention_strength=control_attention_strength,
+            start_image_strength=start_image_strength,
+            ref_image_strength=ref_image_strength,
+            seed=seed,
+            negative_prompt=negative_prompt,
+            prompt_enhance=prompt_enhance,
+            sampler_name=sampler_name,
+            audio_filename=comfy_audio_name,
+        )
+        if engine == "ltx25":
+            base_workflow = load_base_ltx25_recast_workflow()
+            workflow = modify_ltx25_recast_workflow(
+                base_workflow,
+                prompt,
+                width,
+                height,
+                duration,
+                comfy_video_name,
+                comfy_image_name,
+                **common,
+            )
+        else:
+            base_workflow = load_base_ltx23_recast_workflow()
+            workflow = modify_ltx23_recast_workflow(
+                base_workflow,
+                prompt,
+                width,
+                height,
+                duration,
+                comfy_video_name,
+                comfy_image_name,
+                **common,
+            )
+        save_node = "75"
+
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            res = await post_prompt(client, workflow)
+            prompt_id = res.json().get("prompt_id")
+            if not prompt_id:
+                return {"success": False, "error": "No prompt_id"}
+
+            print(f"[LTX RECAST] Queued. Prompt ID: {prompt_id}")
+
+            video_info = None
+            try:
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
+            except Exception:
+                max_attempts = get_generation_max_attempts()
+            for attempt in range(max_attempts):
+                await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
+                try:
+                    history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
+                    if prompt_id in history:
+                        entry = history[prompt_id] or {}
+                        run_status = entry.get("status") or {}
+                        if run_status.get("status_str") == "error":
+                            message = "LTX Recast execution error"
+                            for item in run_status.get("messages") or []:
+                                if isinstance(item, list) and len(item) > 1 and item[0] == "execution_error":
+                                    details = item[1] or {}
+                                    message = details.get("exception_message") or message
+                                    break
+                            await interrupt_comfy_prompt(prompt_id)
+                            return {"success": False, "error": message}
+                        outputs = entry.get("outputs", {})
+                        if attempt % 10 == 0:
+                            print(
+                                f"[LTX RECAST] Prompt found in history (attempt {attempt}). "
+                                f"Nodes: {list(outputs.keys())}"
+                            )
+                        if save_node in outputs:
+                            save_out = outputs[save_node]
+                            if isinstance(save_out, dict) and save_out.get("images"):
+                                for item in save_out["images"]:
+                                    if isinstance(item, dict) and item.get("filename", "").endswith(".mp4"):
+                                        video_info = item
+                                        print(f"[LTX RECAST] Found video file in node {save_node}: {video_info}")
+                                        break
+                            if video_info:
+                                break
+                except Exception as e:
+                    if attempt % 20 == 0:
+                        print(f"[LTX RECAST] Polling warning: {e}")
+
+            if not video_info:
+                print("[LTX RECAST]  No video file found after polling; interrupting ComfyUI job")
+                await interrupt_comfy_prompt(prompt_id)
+                return {"success": False, "error": "No video output found"}
+
+            local_filename = await download_and_save_video(
+                video_info.get("filename"), video_info.get("subfolder", "")
+            )
+            if not local_filename:
+                return {"success": False, "error": "Download failed"}
+
+            return {
+                "success": True,
+                "local_filename": local_filename,
+                "width": width,
+                "height": height,
+                "duration": duration,
+                "recast_engine": engine,
+                "experimental": True,
+            }
+
+    except Exception as e:
+        print(f"[LTX RECAST] Critical error: {e}")
         import traceback
         traceback.print_exc()
         if prompt_id:
@@ -1406,12 +1639,18 @@ async def generate_single_image_to_image(
 
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
-            for attempt in range(max_attempts):  # Uses failed_gen_clear_seconds from settings (images typically complete faster than videos)
+                max_attempts = get_generation_max_attempts()
+            for attempt in range(max_attempts):  # Idle timeout resets on progress; safety loop bound only.
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
 
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
@@ -1430,7 +1669,7 @@ async def generate_single_image_to_image(
                                 for item in node9['images']:
                                     if isinstance(item, dict) and not item.get('filename', '').endswith('.mp4'):
                                         image_info = item
-                                        print(f"[I2I] ✅ Found image file in node 9: {image_info}")
+                                        print(f"[I2I]  Found image file in node 9: {image_info}")
                                         break
 
                             if image_info:
@@ -1441,7 +1680,7 @@ async def generate_single_image_to_image(
                         print(f"[I2I] Polling warning: {e}")
 
             if not image_info:
-                print("[I2I] ❌ No image file found after polling")
+                print("[I2I]  No image file found after polling")
                 return {"success": False, "error": "No image output found"}
 
             # Download the image (reuse existing helper)
@@ -1451,7 +1690,7 @@ async def generate_single_image_to_image(
             )
 
             if local_filename:
-                print(f"[I2I] ✅ Successfully saved: {local_filename}")
+                print(f"[I2I]  Successfully saved: {local_filename}")
                 # Prefer actual dims from the generated output file; fallback to source dims (reliable for i2i children in generations.json)
                 w, h = source_w, source_h
                 if Image is not None:
@@ -1584,12 +1823,18 @@ async def generate_double_image_to_image(
 
             try:
                 # Deferred import to avoid circular dependency (main.py imports generate_* from this module at load time).
-                from main import get_failed_gen_clear_seconds
-                max_attempts = get_failed_gen_clear_seconds()
+                from config import get_generation_max_attempts
+                max_attempts = get_generation_max_attempts()
             except Exception:
-                max_attempts = 600
-            for attempt in range(max_attempts):  # Uses failed_gen_clear_seconds from settings (images typically complete faster than videos)
+                max_attempts = get_generation_max_attempts()
+            for attempt in range(max_attempts):  # Idle timeout resets on progress; safety loop bound only.
                 await asyncio.sleep(1)
+                if progress_idle_timed_out(get_progress_job()):
+                    await interrupt_comfy_prompt(prompt_id)
+                    return {
+                        "success": False,
+                        "error": f"Generation timed out: no progress for {get_generation_idle_timeout_seconds()}s",
+                    }
 
                 try:
                     history = (await client.get(f"{get_comfyui_url()}/history/{prompt_id}")).json()
@@ -1608,7 +1853,7 @@ async def generate_double_image_to_image(
                                 for item in node94['images']:
                                     if isinstance(item, dict) and not item.get('filename', '').endswith('.mp4'):
                                         image_info = item
-                                        print(f"[DOUBLE_I2I] ✅ Found image file in node 94: {image_info}")
+                                        print(f"[DOUBLE_I2I]  Found image file in node 94: {image_info}")
                                         break
 
                             if image_info:
@@ -1619,7 +1864,7 @@ async def generate_double_image_to_image(
                         print(f"[DOUBLE_I2I] Polling warning: {e}")
 
             if not image_info:
-                print("[DOUBLE_I2I] ❌ No image file found after polling")
+                print("[DOUBLE_I2I]  No image file found after polling")
                 return {"success": False, "error": "No image output found"}
 
             # Download the image
@@ -1629,7 +1874,7 @@ async def generate_double_image_to_image(
             )
 
             if local_filename:
-                print(f"[DOUBLE_I2I] ✅ Successfully saved: {local_filename}")
+                print(f"[DOUBLE_I2I]  Successfully saved: {local_filename}")
                 # Get actual dimensions
                 w, h = 0, 0
                 if Image is not None:

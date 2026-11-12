@@ -56,6 +56,7 @@ import {
 } from '../../lib/utils'
 import { Badge, Button, IconButton } from '../ui'
 import { ScorePanel } from '../music/ScorePanel'
+import { CharacterProfileEditor } from './CharacterProfileEditor'
 import type {
   Asset,
   Attachment,
@@ -182,6 +183,9 @@ export function AssetInspector() {
     try {
       await apiUpdateGeneration(asset.id, { [key]: value })
       void queryClient.invalidateQueries({ queryKey: queryKeys.history })
+      if (key === 'character') {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.characters })
+      }
     } catch (error) {
       toast({
         title: 'Could not update asset',
@@ -739,6 +743,8 @@ export function AssetInspector() {
               Delete asset
             </Button>
           </div>
+
+          {asset.character ? <CharacterProfileEditor asset={asset} /> : null}
 
           {tts ? (
             <div className="rounded-xl border border-line bg-white/[0.02] p-3">

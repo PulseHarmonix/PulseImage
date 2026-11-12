@@ -109,6 +109,18 @@ async def post_settings(request: Request):
                         current["failed_gen_clear_seconds"] = t
                 except Exception:
                     pass
+            if "generation_idle_timeout_seconds" in data:
+                try:
+                    t = int(data["generation_idle_timeout_seconds"])
+                    if t > 0:
+                        current["generation_idle_timeout_seconds"] = t
+                except (TypeError, ValueError):
+                    pass
+            if "generation_max_timeout_seconds" in data:
+                try:
+                    current["generation_max_timeout_seconds"] = max(0, int(data["generation_max_timeout_seconds"]))
+                except (TypeError, ValueError):
+                    pass
             if "tts_engine" in data and data["tts_engine"] in ("qwen3", "chatterbox", "cosyvoice3", "indextts25", "f5tts", "xttsv2", "zonos2", "gpt_sovits"):
                 current["tts_engine"] = data["tts_engine"]
             if "tts_qwen3_model" in data and isinstance(data["tts_qwen3_model"], str) and data["tts_qwen3_model"].strip():

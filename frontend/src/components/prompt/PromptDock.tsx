@@ -37,16 +37,30 @@ import { runGeneration } from '../../lib/generation'
 import { runSerializedGeneration } from '../../lib/generationQueue'
 import { upscaleEngineLabel, upscaleFactor } from '../../lib/upscale'
 import { BASE_VIDEO_RESOLUTIONS, LTX_VIDEO_RESOLUTIONS, videoResolutionsFor } from '../../lib/videoResolutions'
-import type { Attachment, PromptMode, PromptTab } from '../../types'
-import { cn, titleFromPrompt } from '../../lib/utils'
+import {
+  RECAST_ENGINE_OPTIONS,
+  RECAST_MAX_DURATION,
+  RECAST_PRESERVE_OPTIONS,
+  RECAST_REFERENCE_FIT_OPTIONS,
+  RECAST_SOURCE_CONTROL_OPTIONS,
+  isRecastActive,
+  recastEngineForTab,
+  recastEngineLabel,
+  recastModelPatch,
+  recastSettingsOf,
+} from '../../lib/recast'
+import type { Attachment, PromptMode, PromptTab, RecastEngine, RecastSettings } from '../../types'
+import { cn, formatDuration, titleFromPrompt } from '../../lib/utils'
 import { mediaUrl } from '../../lib/api'
 import {
+  Badge,
   Button,
   Dropdown,
   DropdownContent,
   DropdownItem,
   DropdownTrigger,
   IconButton,
+  Input,
   Select,
   Textarea,
 } from '../ui'
@@ -87,20 +101,60 @@ const videoModels = [
 const aspects = ['16:9', '9:16', '1:1', '3:2', '2:3']
 const durations = [1, 6, 10, 15, 20, 30, 40, 50, 60]
 
+function readVideoDuration(file: File): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const video = document.createElement('video')
+    const finish = (value?: number) => {
+      URL.revokeObjectURL(url)
+      resolve(value)
+    }
+    video.preload = 'metadata'
+    video.onloadedmetadata = () =>
+      finish(Number.isFinite(video.duration) ? video.duration : undefined)
+    video.onerror = () => finish(undefined)
+    video.src = url
+  })
+}
+
+function roundDuration(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
 function attachmentCounts(tab: PromptTab) {
   return {
-    images: tab.attachments.filter((item) => item.type === 'image' || item.type === 'video').length,
+    images: tab.attachments.filter((item) => item.type === 'image').length,
+    videos: tab.attachments.filter((item) => item.type === 'video').length,
     audios: tab.attachments.filter((item) => item.type === 'audio').length,
   }
 }
 
 function attachmentRejectionReason(tab: PromptTab, type: Attachment['type']): string | null {
-  if (type === 'video') return 'Videos cannot be attached to the prompt bar.'
   if (type === 'voice') {
     return tab.mode === 'speech' && !tab.attachments.some((item) => item.type === 'voice')
       ? null
       : 'Only one marked Voice can be attached in Speech mode.'
   }
+
+  const { images, videos, audios } = attachmentCounts(tab)
+  const hasVideo = videos > 0
+  const hasLora = tab.attachments.some((item) => item.type === 'lora')
+  const isVideo = tab.mode === 'video'
+  const isFastH3 = isVideo && tab.videoModel === 'fasth3'
+  const isFastH3FirstFrame = isFastH3 && tab.fasth3Mode === 'i2v'
+  const isLtx = isVideo && tab.videoModel === 'ltx'
+  const isGrok = isVideo && tab.videoModel === 'grok'
+  const loraReason = 'LoRA can only be added on an empty prompt.'
+  const recastReason = 'Recast does not support Grok. Choose FastH3 or an LTX engine.'
+
+  if (type === 'video') {
+    if (!isVideo) return 'Source videos are only supported in Video mode.'
+    if (isGrok) return recastReason
+    if (!isFastH3 && !isLtx) return 'Source videos require FastH3 or LTX.'
+    if (hasLora) return loraReason
+    return hasVideo ? 'Only one source video is supported.' : null
+  }
+
   if (tab.mode === 'speech') return 'That attachment is not compatible with the current prompt setup.'
   if (type === 'audio' && tab.mode !== 'video') {
     return 'Audio attachments are only supported in Video mode.'
@@ -109,19 +163,14 @@ function attachmentRejectionReason(tab: PromptTab, type: Attachment['type']): st
     return 'LoRA is only supported for image generation.'
   }
 
-  const { images, audios } = attachmentCounts(tab)
-  const hasLora = tab.attachments.some((item) => item.type === 'lora')
-  const isVideo = tab.mode === 'video'
-  const isFastH3 = isVideo && tab.videoModel === 'fasth3'
-  const isFastH3FirstFrame = isFastH3 && tab.fasth3Mode === 'i2v'
-  const isLtx = isVideo && tab.videoModel === 'ltx'
-  const isGrok = isVideo && tab.videoModel === 'grok'
-  const loraReason = 'LoRA can only be added on an empty prompt.'
-
   if (type === 'lora') return tab.attachments.length === 0 ? null : loraReason
 
   if (type === 'image') {
     if (hasLora) return loraReason
+    if (hasVideo) {
+      if (isGrok) return recastReason
+      return images < 6 ? null : 'Recast supports up to 6 images (one starting image plus references).'
+    }
     if (isFastH3FirstFrame) {
       return images < 1 ? null : 'FastH3 First-frame mode accepts one image and no audio.'
     }
@@ -134,6 +183,7 @@ function attachmentRejectionReason(tab: PromptTab, type: Attachment['type']): st
   }
 
   if (type === 'audio') {
+    if (hasVideo) return 'Source audio is controlled by the Recast setting.'
     if (hasLora) return loraReason
     if (isGrok) return 'Grok video accepts one image and no audio.'
     if (isFastH3FirstFrame) return 'FastH3 First-frame mode accepts one image and no audio.'
@@ -148,11 +198,12 @@ function attachmentRejectionReason(tab: PromptTab, type: Attachment['type']): st
 }
 
 function videoSetupIssue(tab: PromptTab): string | null {
-  const { images, audios } = attachmentCounts(tab)
+  const { images, videos, audios } = attachmentCounts(tab)
   const hasVoice = tab.attachments.some((item) => item.type === 'voice')
   const hasLora = tab.attachments.some((item) => item.type === 'lora')
 
   if (tab.mode === 'image') {
+    if (videos > 0) return 'Source videos are only supported in Video mode.'
     if (audios > 0) return 'Audio attachments are only supported in Video mode.'
     if (hasVoice) return 'Voice attachments are only supported in Speech mode.'
     return null
@@ -165,6 +216,16 @@ function videoSetupIssue(tab: PromptTab): string | null {
 
   if (hasVoice) return 'Voice attachments are only supported in Speech mode.'
   if (hasLora) return 'LoRA is only supported for image generation.'
+  if (videos > 1) return 'Only one source video is supported.'
+
+  if (videos > 0) {
+    if (tab.videoModel !== 'fasth3' && tab.videoModel !== 'ltx') {
+      return 'Recast does not support Grok. Choose FastH3 or an LTX engine.'
+    }
+    if (images === 0) return 'Add a starting image to use Recast.'
+    if (images > 6) return 'Recast supports up to 6 images (one starting image plus references).'
+    return null
+  }
 
   if (tab.videoModel === 'fasth3') {
     if (tab.fasth3Mode === 'i2v') {
@@ -191,14 +252,22 @@ function videoSetupIssue(tab: PromptTab): string | null {
   return null
 }
 
-function labelledAttachments(attachments: Attachment[]) {
+function labelledAttachments(attachments: Attachment[], recast = false) {
   let imageIndex = 0
+  let videoIndex = 0
   let audioIndex = 0
   return attachments.map((attachment) => {
     let label = attachment.name
-    if (attachment.type === 'image' || attachment.type === 'video') {
+    if (attachment.type === 'video') {
+      videoIndex += 1
+      label = recast ? 'Motion source' : `Video ${videoIndex}`
+    } else if (attachment.type === 'image') {
       imageIndex += 1
-      label = `Image ${imageIndex}`
+      label = recast
+        ? imageIndex === 1
+          ? 'Starting character'
+          : `Character ref ${imageIndex - 1}`
+        : `Image ${imageIndex}`
     } else if (attachment.type === 'audio') {
       audioIndex += 1
       label = `Audio ${audioIndex}`
@@ -370,7 +439,22 @@ export function PromptDock() {
         })
         return false
       }
-      addAttachment(attachment)
+      if (attachment.type === 'video') {
+        const engine = recastEngineForTab(current)
+        const cap = engine ? RECAST_MAX_DURATION[engine] : 60
+        const rest = current.attachments.filter(
+          (item) => item.type !== 'video' && item.type !== 'audio',
+        )
+        const patch: Partial<PromptTab> = { attachments: [...rest, attachment] }
+        if (attachment.duration && Number.isFinite(attachment.duration)) {
+          patch.duration = roundDuration(
+            Math.min(Math.max(1, attachment.duration), cap),
+          )
+        }
+        state.updateActive(patch)
+      } else {
+        addAttachment(attachment)
+      }
       return true
     },
     [addAttachment, toast],
@@ -412,12 +496,75 @@ export function PromptDock() {
   const isLtx = tab.mode === 'video' && tab.videoModel === 'ltx'
   const autoPromptEnabled = isFastH3 ? Boolean(tab.h3?.enabled) : isLtx ? Boolean(tab.ltx?.enabled) : false
   const resolutionChoices = isLtx ? LTX_VIDEO_RESOLUTIONS : BASE_VIDEO_RESOLUTIONS
+  const videoAttachment = tab.attachments.find((item) => item.type === 'video')
+  const [probedSourceDuration, setProbedSourceDuration] = useState<number | null>(null)
+  const sourceVideoDuration = videoAttachment?.duration ?? probedSourceDuration ?? undefined
+  const recastEngine = recastEngineForTab(tab)
+  const recastActive = isRecastActive(tab)
+  const recastSettings = recastSettingsOf(tab)
+  const recastCap = recastEngine ? RECAST_MAX_DURATION[recastEngine] : 60
+  const recastDurationWarning =
+    sourceVideoDuration && recastEngine && sourceVideoDuration > recastCap
+      ? `Motion source is ${formatDuration(sourceVideoDuration)}; ${recastEngineLabel(recastEngine)} caps Recast at ${recastCap}s.`
+      : null
+  const sourceDurationFits = Boolean(
+    sourceVideoDuration && Number.isFinite(sourceVideoDuration) && sourceVideoDuration <= recastCap,
+  )
+  const sourceDurationChoice =
+    sourceVideoDuration && Number.isFinite(sourceVideoDuration) && sourceVideoDuration > 0
+      ? roundDuration(recastActive ? Math.min(sourceVideoDuration, recastCap) : sourceVideoDuration)
+      : null
+  const durationChoices = (() => {
+    const maxDuration = recastActive ? recastCap : Infinity
+    const values = new Set(durations.filter((value) => value <= maxDuration))
+    if (tab.duration && Number.isFinite(tab.duration) && tab.duration <= maxDuration) {
+      values.add(tab.duration)
+    }
+    if (sourceDurationChoice !== null) {
+      values.add(sourceDurationChoice)
+    }
+    return Array.from(values).sort((a, b) => a - b)
+  })()
 
   useEffect(() => {
     if (!resolutionChoices.includes(tab.resolution)) {
       updateActive({ resolution: '1080p' })
     }
   }, [resolutionChoices, tab.resolution, updateActive])
+
+  useEffect(() => {
+    if (!videoAttachment || !recastEngine) return
+    if (tab.duration > recastCap) updateActive({ duration: recastCap })
+  }, [videoAttachment, recastEngine, recastCap, tab.duration, updateActive])
+
+  useEffect(() => {
+    if (!videoAttachment) {
+      setProbedSourceDuration(null)
+      return
+    }
+    if (typeof videoAttachment.duration === 'number' && Number.isFinite(videoAttachment.duration)) {
+      setProbedSourceDuration(null)
+      return
+    }
+    const src = videoAttachment.src || mediaUrl(`/videos/${videoAttachment.name}`)
+    if (!src) return
+    let cancelled = false
+    const video = document.createElement('video')
+    const finish = (duration?: number) => {
+      if (!cancelled && typeof duration === 'number' && Number.isFinite(duration) && duration > 0) {
+        setProbedSourceDuration(duration)
+      }
+    }
+    video.preload = 'metadata'
+    video.onloadedmetadata = () => finish(video.duration)
+    video.onerror = () => finish(undefined)
+    video.src = src
+    return () => {
+      cancelled = true
+      video.removeAttribute('src')
+      video.load()
+    }
+  }, [videoAttachment?.id, videoAttachment?.name, videoAttachment?.src, videoAttachment?.duration])
 
   useEffect(() => {
     if (!settings.data) return
@@ -475,16 +622,53 @@ export function PromptDock() {
 
   const setVideoSelection = (value: string) => {
     const nextModel = value.startsWith('ltx-') ? 'ltx' : value
+    if (videoAttachment && nextModel === 'grok') {
+      toast({
+        title: 'Recast does not support Grok',
+        description: 'Remove the source video or choose FastH3 / LTX to use Recast.',
+        tone: 'error',
+      })
+      return
+    }
     const resolutionPatch = videoResolutionsFor(nextModel).includes(tab.resolution)
       ? {}
       : { resolution: '1080p' }
+    const nextEngine =
+      nextModel === 'fasth3' ? 'fasth3' : value === 'ltx-2.5' ? 'ltx25' : 'ltx23'
+    const durationPatch = videoAttachment
+      ? { duration: Math.min(tab.duration, RECAST_MAX_DURATION[nextEngine]) }
+      : {}
     if (value.startsWith('ltx-')) {
-      updateActive({ videoModel: 'ltx', ltxVersion: value.slice(4), ...resolutionPatch })
+      updateActive({ videoModel: 'ltx', ltxVersion: value.slice(4), ...resolutionPatch, ...durationPatch })
       void updateSettings({ video_model: 'ltx', ltx_version: value.slice(4) })
     } else {
-      updateActive({ videoModel: value, ...resolutionPatch })
+      updateActive({ videoModel: value, ...resolutionPatch, ...durationPatch })
       void updateSettings({ video_model: value })
     }
+  }
+
+  const updateRecastSettings = (patch: Partial<RecastSettings>) => {
+    updateActive({ recastSettings: { ...recastSettings, ...patch } })
+  }
+
+  const setRecastEngine = (engine: RecastEngine) => {
+    const patch = recastModelPatch(engine)
+    updateActive({
+      ...patch,
+      duration: Math.min(tab.duration, RECAST_MAX_DURATION[engine]),
+    })
+    if (patch.videoModel === 'ltx') {
+      void updateSettings({ video_model: 'ltx', ltx_version: patch.ltxVersion })
+    } else {
+      void updateSettings({ video_model: patch.videoModel })
+    }
+  }
+
+  const togglePreserve = (value: string) => {
+    const preserve = recastSettings.preserve.includes(value)
+      ? recastSettings.preserve.filter((item) => item !== value)
+      : [...recastSettings.preserve, value]
+    updateRecastSettings({ preserve })
   }
 
   const toggleAutoPrompt = () => {
@@ -599,12 +783,23 @@ export function PromptDock() {
       const result = await apiUpload(file)
       const name = result.filename
       if (!name) throw new Error('Upload failed')
-      const type = file.type.startsWith('audio/') ? 'audio' : 'image'
+      const type: Attachment['type'] = file.type.startsWith('video/')
+        ? 'video'
+        : file.type.startsWith('audio/')
+          ? 'audio'
+          : 'image'
+      const duration = type === 'video' ? await readVideoDuration(file) : undefined
       addAssetAttachment({
         name,
         displayName: file.name,
         type,
-        src: type === 'image' ? `/images/${name}` : `/audio/${name}`,
+        src:
+          type === 'video'
+            ? `/videos/${name}`
+            : type === 'audio'
+              ? `/audio/${name}`
+              : `/images/${name}`,
+        duration,
       })
     } catch (error) {
       toast({
@@ -690,6 +885,7 @@ export function PromptDock() {
       src: data.src,
       prompt: data.prompt,
       aspect: data.aspect,
+      duration: data.duration,
       voice: data.voice,
     })
     if (added) setComposerOpen(true)
@@ -874,6 +1070,13 @@ export function PromptDock() {
             ))}
           </div>
 
+          {recastActive ? (
+            <Badge tone="lime">
+              <Sparkles className="size-3" />
+              Recast
+            </Badge>
+          ) : null}
+
           {tab.mode === 'image' ? (
             <Dropdown>
               <DropdownTrigger asChild>
@@ -939,7 +1142,11 @@ export function PromptDock() {
               onChange={(event) => setVideoSelection(event.target.value)}
             >
               {videoModels.map((model) => (
-                <option key={model.value} value={model.value}>
+                <option
+                  key={model.value}
+                  value={model.value}
+                  disabled={Boolean(videoAttachment) && model.value === 'grok'}
+                >
                   {model.label}
                 </option>
               ))}
@@ -993,12 +1200,28 @@ export function PromptDock() {
               className="h-6 pl-2 pr-6 text-[11px] w-auto min-w-[72px]"
               value={tab.duration}
               onChange={(event) => updateActive({ duration: Number(event.target.value) })}
+              title={
+                sourceVideoDuration
+                  ? `Motion source duration: ${formatDuration(sourceVideoDuration)}`
+                  : undefined
+              }
             >
-              {durations.map((duration) => (
-                <option key={duration} value={duration}>
-                  {duration}s
-                </option>
-              ))}
+              {durationChoices.map((duration) => {
+                const isSourceDuration =
+                  recastActive &&
+                  sourceDurationChoice !== null &&
+                  Math.abs(duration - sourceDurationChoice) < 0.01
+                const label = isSourceDuration
+                  ? sourceDurationFits
+                    ? `Same as source (${formatDuration(sourceVideoDuration!)})`
+                    : `Source longer ? max ${recastCap}s`
+                  : `${duration}s`
+                return (
+                  <option key={duration} value={duration}>
+                    {label}
+                  </option>
+                )
+              })}
             </Select>
           ) : null}
 
@@ -1135,20 +1358,284 @@ export function PromptDock() {
                 </Select>
               </label>
             ) : null}
-            {tab.mode === 'video' ? (
-              <>
+            {tab.mode === 'video' && recastActive ? (
+              <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5">
                 <label className="flex items-center gap-2 text-[10px] text-text-3">
-                  FastH3 mode
+                  Recast engine
                   <Select
-                    className="h-6 pl-2 pr-6 text-[11px] min-w-[108px]"
-                    value={tab.fasth3Mode}
-                    onChange={(event) => updateActive({ fasth3Mode: event.target.value })}
+                    className="h-6 pl-2 pr-6 text-[11px] min-w-[160px]"
+                    value={recastEngine ?? 'fasth3'}
+                    onChange={(event) => setRecastEngine(event.target.value as RecastEngine)}
                   >
-                    <option value="reference">Reference</option>
-                    <option value="i2v">First frame</option>
+                    {RECAST_ENGINE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </Select>
                 </label>
-              </>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-[10px] text-text-3">Preserve</span>
+                  {RECAST_PRESERVE_OPTIONS.map((option) => (
+                    <label
+                      key={option}
+                      className="flex items-center gap-1 text-[10px] capitalize text-text-3"
+                    >
+                      <input
+                        type="checkbox"
+                        className="size-3 accent-lime"
+                        checked={recastSettings.preserve.includes(option)}
+                        onChange={() => togglePreserve(option)}
+                      />
+                      {option}
+                    </label>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 text-[10px] text-text-3">
+                  Source audio
+                  <Select
+                    className="h-6 pl-2 pr-6 text-[11px] min-w-[136px]"
+                    value={recastSettings.audio_mode}
+                    onChange={(event) =>
+                      updateRecastSettings({
+                        audio_mode: event.target.value as RecastSettings['audio_mode'],
+                      })
+                    }
+                  >
+                    <option value="mute">Mute</option>
+                    <option value="copy">Keep source audio</option>
+                    <option value="reference">Use as audio reference</option>
+                  </Select>
+                </label>
+                <label className="flex items-center gap-2 text-[10px] text-text-3">
+                  Starting image
+                  <Select
+                    className="h-6 pl-2 pr-6 text-[11px] min-w-[150px]"
+                    value={recastSettings.start_image_mode}
+                    onChange={(event) =>
+                      updateRecastSettings({
+                        start_image_mode: event.target
+                          .value as RecastSettings['start_image_mode'],
+                      })
+                    }
+                  >
+                    <option value="first_frame_identity">First frame + identity</option>
+                    <option value="identity">Identity only</option>
+                    <option value="first_frame">First frame only</option>
+                  </Select>
+                </label>
+                {recastEngine === 'ltx23' || recastEngine === 'ltx25' ? (
+                  <>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Motion source
+                      <Select
+                        className="h-6 pl-2 pr-6 text-[11px] min-w-[116px]"
+                        value={recastSettings.source_control}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            source_control: event.target
+                              .value as RecastSettings['source_control'],
+                          })
+                        }
+                      >
+                        {RECAST_SOURCE_CONTROL_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Reference fit
+                      <Select
+                        className="h-6 pl-2 pr-6 text-[11px] min-w-[108px]"
+                        value={recastSettings.reference_fit}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            reference_fit: event.target
+                              .value as RecastSettings['reference_fit'],
+                          })
+                        }
+                      >
+                        {RECAST_REFERENCE_FIT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Start at
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        className="h-6 w-16 text-[11px]"
+                        value={recastSettings.source_start}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            source_start: Math.max(0, Number(event.target.value) || 0),
+                          })
+                        }
+                        title="Seconds into the source video"
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Source strength
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={recastSettings.source_guide_strength}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            source_guide_strength: Number(event.target.value),
+                          })
+                        }
+                        className="w-20 accent-lime"
+                      />
+                      <span className="w-7 text-text-2">
+                        {recastSettings.source_guide_strength.toFixed(2)}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Control attention
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={recastSettings.control_attention_strength}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            control_attention_strength: Number(event.target.value),
+                          })
+                        }
+                        className="w-20 accent-lime"
+                      />
+                      <span className="w-7 text-text-2">
+                        {recastSettings.control_attention_strength.toFixed(2)}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Identity strength
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={recastSettings.start_image_strength}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            start_image_strength: Number(event.target.value),
+                          })
+                        }
+                        className="w-20 accent-lime"
+                      />
+                      <span className="w-7 text-text-2">
+                        {recastSettings.start_image_strength.toFixed(2)}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Ref strength
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={recastSettings.ref_image_strength}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            ref_image_strength: Number(event.target.value),
+                          })
+                        }
+                        className="w-20 accent-lime"
+                      />
+                      <span className="w-7 text-text-2">
+                        {recastSettings.ref_image_strength.toFixed(2)}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Seed
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        placeholder="Random"
+                        className="h-6 w-24 text-[11px]"
+                        value={recastSettings.seed ?? ''}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            seed:
+                              event.target.value === ''
+                                ? null
+                                : Math.max(0, Math.floor(Number(event.target.value) || 0)),
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-[10px] text-text-3">
+                      Sampler
+                      <Select
+                        className="h-6 pl-2 pr-6 text-[11px] min-w-[146px]"
+                        value={recastSettings.sampler_name || 'auto'}
+                        onChange={(event) =>
+                          updateRecastSettings({
+                            sampler_name: event.target.value === 'auto' ? '' : event.target.value,
+                          })
+                        }
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="euler_ancestral_cfg_pp">Euler ancestral CFG++</option>
+                        <option value="euler_ancestral">Euler ancestral</option>
+                        <option value="euler">Euler</option>
+                      </Select>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[10px] text-text-3">
+                      <input
+                        type="checkbox"
+                        className="size-3 accent-lime"
+                        checked={recastSettings.prompt_enhance}
+                        onChange={(event) =>
+                          updateRecastSettings({ prompt_enhance: event.target.checked })
+                        }
+                      />
+                      Enhance prompt
+                    </label>
+                    <label className="flex w-full items-center gap-2 text-[10px] text-text-3">
+                      Negative
+                      <Input
+                        className="h-6 flex-1 text-[11px]"
+                        value={recastSettings.negative_prompt}
+                        onChange={(event) =>
+                          updateRecastSettings({ negative_prompt: event.target.value })
+                        }
+                        placeholder="Default: game, cartoon, childish, ugly"
+                      />
+                    </label>
+                    <span className="w-full text-[10px] text-warning">
+                      Experimental: LTX Recast uses the union-control IC-LoRA and may need strength tuning.
+                    </span>
+                  </>
+                ) : null}
+                {recastDurationWarning ? (
+                  <span className="w-full text-[10px] text-warning">{recastDurationWarning}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {tab.mode === 'video' && !recastActive ? (
+              <label className="flex items-center gap-2 text-[10px] text-text-3">
+                FastH3 mode
+                <Select
+                  className="h-6 pl-2 pr-6 text-[11px] min-w-[108px]"
+                  value={tab.fasth3Mode}
+                  onChange={(event) => updateActive({ fasth3Mode: event.target.value })}
+                >
+                  <option value="reference">Reference</option>
+                  <option value="i2v">First frame</option>
+                </Select>
+              </label>
             ) : null}
             {tab.mode === 'speech' ? (
               <>
@@ -1199,7 +1686,7 @@ export function PromptDock() {
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/*,audio/*"
+                accept="image/*,audio/*,video/*"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0]
@@ -1257,7 +1744,10 @@ export function PromptDock() {
             </div>
             {tab.attachments.length ? (
               <div className="flex gap-1.5 overflow-x-auto border-t border-line px-1.5 py-1 no-scrollbar">
-                {labelledAttachments(tab.attachments).map(({ attachment, label }, index) => (
+                {labelledAttachments(
+                  tab.attachments,
+                  Boolean(videoAttachment) && Boolean(recastEngine),
+                ).map(({ attachment, label }, index) => (
                   <AttachmentChip
                     key={`${attachment.type}-${attachment.name}-${index}`}
                     attachment={attachment}
@@ -1270,6 +1760,11 @@ export function PromptDock() {
           </div>
           {setupIssue ? (
             <p className="mt-1 px-1 text-[10px] leading-4 text-danger">{setupIssue}</p>
+          ) : null}
+          {recastDurationWarning && !advanced ? (
+            <p className="mt-1 px-1 text-[10px] leading-4 text-warning">
+              {recastDurationWarning}
+            </p>
           ) : null}
           <div className="mt-1 flex items-center justify-between gap-2 px-1">
             <div className="flex items-center gap-2 text-[10px] text-text-3">
@@ -1309,11 +1804,18 @@ function AttachmentChip({
   onRemove: () => void
 }) {
   const isImage = attachment.type === 'image'
+  const isVideo = attachment.type === 'video'
   const displayName =
     attachment.displayName ||
     (attachment.prompt ? titleFromPrompt(attachment.prompt) : '') ||
     attachment.name
-  const src = attachment.src || (isImage ? `/images/${attachment.name}` : `/audio/${attachment.name}`)
+  const src =
+    attachment.src ||
+    (isImage
+      ? `/images/${attachment.name}`
+      : isVideo
+        ? `/videos/${attachment.name}`
+        : `/audio/${attachment.name}`)
   return (
     <div
       className="group relative flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-2"
@@ -1321,6 +1823,18 @@ function AttachmentChip({
     >
       {isImage ? (
         <img src={mediaUrl(src)} alt="" className="size-6 rounded-md object-cover" />
+      ) : isVideo ? (
+        <div className="relative size-6 overflow-hidden rounded-md bg-lime-soft text-lime">
+          <video
+            src={mediaUrl(src)}
+            muted
+            preload="metadata"
+            className="size-full object-cover"
+          />
+          <span className="absolute inset-0 grid place-items-center bg-black/35">
+            <Video className="size-3" />
+          </span>
+        </div>
       ) : (
         <div className="grid size-6 place-items-center rounded-md bg-lime-soft text-lime">
           {attachment.type === 'lora' ? (
@@ -1332,7 +1846,10 @@ function AttachmentChip({
       )}
       <div className="max-w-[140px]">
         <p className="truncate text-[10px] font-medium text-text-2">{label}</p>
-        <p className="truncate text-[9px] text-text-3">{displayName}</p>
+        <p className="truncate text-[9px] text-text-3">
+          {displayName}
+          {isVideo && attachment.duration ? ` · ${formatDuration(attachment.duration)}` : ''}
+        </p>
       </div>
       <button
         onClick={onRemove}

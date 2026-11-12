@@ -19,7 +19,8 @@ export function SettingsPage() {
     comfyui_url: '',
     ollama_url: '',
     ollama_model: '',
-    failed_gen_clear_seconds: 600,
+    generation_idle_timeout_seconds: 600,
+    generation_max_timeout_seconds: 0,
     relayvsr_detail: 1,
     relayvsr_timeout_seconds: 1800,
   })
@@ -32,7 +33,8 @@ export function SettingsPage() {
       comfyui_url: String(data.comfyui_url || ''),
       ollama_url: String(data.ollama_url || ''),
       ollama_model: String(data.ollama_model || ''),
-      failed_gen_clear_seconds: Number(data.failed_gen_clear_seconds || 600),
+      generation_idle_timeout_seconds: Number(data.generation_idle_timeout_seconds || 600),
+      generation_max_timeout_seconds: Number(data.generation_max_timeout_seconds || 0),
       relayvsr_detail: Number(data.relayvsr_detail || 1),
       relayvsr_timeout_seconds: Number(data.relayvsr_timeout_seconds || 1800),
     })
@@ -84,12 +86,20 @@ export function SettingsPage() {
         </Section>
 
         <Section icon={<SlidersHorizontal className="size-4" />} title="Generation" description="Timeouts and post-processing defaults.">
-          <Field label="Failed generation clear timeout (seconds)">
+          <Field label="Generation idle timeout (seconds)">
             <Input
               type="number"
               min={30}
-              value={form.failed_gen_clear_seconds}
-              onChange={(event) => setForm({ ...form, failed_gen_clear_seconds: Number(event.target.value) })}
+              value={form.generation_idle_timeout_seconds}
+              onChange={(event) => setForm({ ...form, generation_idle_timeout_seconds: Number(event.target.value) })}
+            />
+          </Field>
+          <Field label="Maximum generation time (seconds, 0 = no limit)">
+            <Input
+              type="number"
+              min={0}
+              value={form.generation_max_timeout_seconds}
+              onChange={(event) => setForm({ ...form, generation_max_timeout_seconds: Number(event.target.value) })}
             />
           </Field>
           <Field label="RelayVSR detail">

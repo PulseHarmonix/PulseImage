@@ -3,8 +3,10 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/shell/AppShell'
 import { StudioPage } from './pages/StudioPage'
 import { LibraryPage } from './pages/LibraryPage'
+import { StoriesPage } from './pages/StoriesPage'
 import { MusicVideoPage } from './pages/MusicVideoPage'
 import { FramesPage } from './pages/FramesPage'
+import { VideoAudioPage } from './pages/VideoAudioPage'
 import { MusicGeneratorPage } from './pages/MusicGeneratorPage'
 import { PlayerPage } from './pages/PlayerPage'
 import { MotionPage } from './pages/MotionPage'
@@ -29,11 +31,13 @@ export default function App() {
           <Route element={<AppShell />}>
             <Route index element={<StudioPage />} />
             <Route path="library" element={<LibraryPage />} />
+            <Route path="stories" element={<StoriesPage />} />
             <Route path="music" element={<MusicVideoPage />} />
             <Route path="motion" element={<MotionPage />} />
             <Route path="songs" element={<MusicGeneratorPage />} />
             <Route path="player" element={<PlayerPage />} />
             <Route path="frames" element={<FramesPage />} />
+            <Route path="video-audio" element={<VideoAudioPage />} />
             <Route path="voices" element={<VoicesPage />} />
             <Route path="models" element={<ModelsPage />} />
             <Route path="settings" element={<SettingsPage />} />
