@@ -44,17 +44,21 @@ Written by Pulse Harmonix
 
 ## SCREENSHOTS
 
-| Studio | Music Generator |
+| Music Generator | Music Video |
 | :---: | :---: |
-| <img src="docs/images/composer.png" alt="Pulse Image Studio composer" width="420" /> | <img src="docs/images/music.png" alt="Pulse Image Music Generator" width="420" /> |
-| **Music Video** | **Motion** |
-| <img src="docs/images/music-video.png" alt="Pulse Image Music Video timeline" width="420" /> | <img src="docs/images/motion.png" alt="Pulse Image Motion controls" width="420" /> |
-| **Single Frame** | **Video Audio** |
-| <img src="docs/images/single-frame.png" alt="Pulse Image Single Frame picker" width="420" /> | <img src="docs/images/video-audio.png" alt="Pulse Image Video Audio extraction" width="420" /> |
-| **Voices** | **Models** |
-| <img src="docs/images/voices.png" alt="Pulse Image Voices library" width="420" /> | <img src="docs/images/models.png" alt="Pulse Image Models and workflow assets" width="420" /> |
-| **Settings** | |
-| <img src="docs/images/settings.png" alt="Pulse Image Settings" width="420" /> | |
+| <img src="docs/images/music.png" alt="Pulse Image Music Generator" width="420" /> | <img src="docs/images/music-video.png" alt="Pulse Image Music Video timeline" width="420" /> |
+| **Motion** | **Single Frame** |
+| <img src="docs/images/motion.png" alt="Pulse Image Motion controls" width="420" /> | <img src="docs/images/single-frame.png" alt="Pulse Image Single Frame picker" width="420" /> |
+| **Video Audio** | **Voices** |
+| <img src="docs/images/video-audio.png" alt="Pulse Image Video Audio extraction" width="420" /> | <img src="docs/images/voices.png" alt="Pulse Image Voices library" width="420" /> |
+| **Models** | **Settings** |
+| <img src="docs/images/models.png" alt="Pulse Image Models and workflow assets" width="420" /> | <img src="docs/images/settings.png" alt="Pulse Image Settings" width="420" /> |
+
+### Composer
+
+<p align="center">
+  <img src="docs/images/composer.png" alt="Pulse Image Composer" width="840" />
+</p>
 
 ---
 
