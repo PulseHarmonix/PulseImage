@@ -1,3 +1,5 @@
+# Pulse Image backend requirements (Python 3.12+)
+
 # Core web framework and validation
 fastapi>=0.115
 uvicorn[standard]>=0.30
@@ -8,7 +10,7 @@ python-multipart>=0.0.9
 httpx>=0.27
 websockets>=13
 
-# Thumbnails, image dimensions, and frame previews
+# Thumbnails, image dimensions, frame previews, and recast reference fitting
 Pillow>=10
 opencv-python-headless>=4.10
 

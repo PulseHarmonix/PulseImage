@@ -67,6 +67,10 @@ AGENTS.md
 # Motion preset preview media is intentionally tracked
 !motion-presets/*.mp4
 !motion-presets/*.jpg
+
+# README screenshots are intentionally tracked
+!docs/images/
+!docs/images/*.png
 # React frontend dependencies / build
 frontend/node_modules/
 frontend/dist/

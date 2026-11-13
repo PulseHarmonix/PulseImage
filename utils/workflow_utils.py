@@ -143,6 +143,8 @@ def get_image_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
     """
     # Map resolution button to target height (in landscape)
     height_map = {
+        "240p": 256,     # Nearest multiple of 64 to 240
+        "320p": 320,
         "480p": 512,     # Nearest multiple of 64 to 480
         "720p": 704,     # Nearest multiple of 64 to 720
         "1080p": 1088    # Nearest multiple of 64 to 1080
@@ -172,9 +174,15 @@ def get_image_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
         width = base_height
         height = base_height
 
-    # Ensure dimensions are multiples of 64 (required for Flux/SD models)
-    width = max(64, (width // 64) * 64)
-    height = max(64, (height // 64) * 64)
+    # Ensure dimensions are multiples of 64 (required for Flux/SD models).
+    # Low-resolution modes round instead of floor so 240p/320p keep a useful
+    # landscape/portrait shape rather than collapsing a dimension.
+    if resolution in ("240p", "320p"):
+        width = max(64, int(round(width / 64.0)) * 64)
+        height = max(64, int(round(height / 64.0)) * 64)
+    else:
+        width = max(64, (width // 64) * 64)
+        height = max(64, (height // 64) * 64)
 
     return width, height
 

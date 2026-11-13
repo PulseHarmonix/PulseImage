@@ -53,6 +53,8 @@ def modify_video_workflow(
 def get_video_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
     """Calculate width and height for video generation."""
     height_map = {
+        "240p": 256,
+        "320p": 320,
         "480p": 720,
         "720p": 720,
         "1080p": 1080,
@@ -85,6 +87,11 @@ def get_video_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
     if resolution in ("1440p", "4K"):
         width = max(64, ((width + 31) // 32) * 32)
         height = max(64, ((height + 31) // 32) * 32)
+    elif resolution in ("240p", "320p"):
+        # LTX/FastH3 latent grids step by 32px. Keep the low-res modes below
+        # the normal 512px floor.
+        width = max(64, int(round(width / 32.0)) * 32)
+        height = max(64, int(round(height / 32.0)) * 32)
     else:
         width = max(512, (width // 64) * 64)
         height = max(512, (height // 64) * 64)
@@ -100,8 +107,12 @@ def get_ltx_recast_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, 
     that true while staying close to the requested aspect.
     """
     width, height = get_video_dimensions(resolution, aspect_ratio)
-    width = max(128, int(round(width / 128.0)) * 128)
-    height = max(128, int(round(height / 128.0)) * 128)
+    if resolution in ("240p", "320p"):
+        width = max(128, ((width + 127) // 128) * 128)
+        height = max(128, ((height + 127) // 128) * 128)
+    else:
+        width = max(128, int(round(width / 128.0)) * 128)
+        height = max(128, int(round(height / 128.0)) * 128)
     return width, height
 
 

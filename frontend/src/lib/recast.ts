@@ -28,8 +28,8 @@ export const RECAST_SOURCE_CONTROL_OPTIONS = [
 
 export const RECAST_MAX_DURATION: Record<RecastEngine, number> = {
   fasth3: 15,
-  ltx23: 40,
-  ltx25: 40,
+  ltx23: 120,
+  ltx25: 120,
 }
 
 export function defaultRecastSettings(): RecastSettings {

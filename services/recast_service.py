@@ -38,8 +38,8 @@ RECAST_SOURCE_CONTROLS = ("raw", "canny", "pose", "depth")
 RECAST_FPS = 24.0
 FASTH3_MAX_SECONDS = 15.0
 LTX_MAX_SECONDS = {
-    "ltx23": 40.0,
-    "ltx25": 40.0,
+    "ltx23": 120.0,
+    "ltx25": 120.0,
 }
 
 
@@ -356,7 +356,7 @@ def _prepare_source_video(options: dict) -> dict:
     available = max(0.1, source_duration - start_offset)
 
     engine = options["engine"]
-    limit = FASTH3_MAX_SECONDS if engine == "fasth3" else LTX_MAX_SECONDS.get(engine, 40.0)
+    limit = FASTH3_MAX_SECONDS if engine == "fasth3" else LTX_MAX_SECONDS.get(engine, 120.0)
     requested = float(options["duration"])
 
     warnings: list[str] = []

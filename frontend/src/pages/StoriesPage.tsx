@@ -55,7 +55,7 @@ import type {
 } from '../types'
 
 const aspectOptions = ['16:9', '9:16', '1:1', '3:2', '2:3']
-const resolutionOptions = ['480p', '720p', '1080p']
+const resolutionOptions = ['240p', '320p', '480p', '720p', '1080p']
 const storyDurationOptions = [30, 45, 60, 75, 90]
 const continuityOptions: { value: StoryContinuityMode; label: string }[] = [
   { value: 'new_scene', label: 'New scene' },
