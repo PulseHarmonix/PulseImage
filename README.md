@@ -235,6 +235,7 @@ PulseImage/
 |-- main.py                  # FastAPI entry point and SPA serving
 |-- config.py                # Settings defaults and DB loading
 |-- requirements.txt         # Python dependencies
+|-- LICENSE                  # PolyForm Noncommercial 1.0.0
 |-- docs/images/             # README screenshots
 |-- frontend/                # React studio (Vite + TypeScript)
 |   |-- src/                 # Pages, components, API client, stores
@@ -279,3 +280,15 @@ PulseImage/
 - **Recast source has no audio** - recast automatically falls back to mute; choose FastH3 audio-reference mode only when the source has an audio track.
 - **LTX recast missing models** - open **Models** and check the LTX 2.3/2.5 checkpoints, text encoders, VAEs, upscalers, and Union Control IC-LoRA.
 - **LTX recast conditioning-frame error** - source duration is aligned to the LTX latent window; keep FFmpeg available for preparation and final trimming.
+
+---
+
+## LICENSE
+
+Pulse Image is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You may use, modify, fork, and share the software for noncommercial purposes. Commercial use, selling, paid products or services, and sublicensing or transferring the license are not permitted. Forks and modified versions distributed to others remain subject to the same noncommercial terms.
+
+Third-party software, model weights, ComfyUI, Ollama, and other dependencies are covered by their own licenses and are not relicensed by this project.
+
+Copyright © 2026 Pulse Harmonix.
