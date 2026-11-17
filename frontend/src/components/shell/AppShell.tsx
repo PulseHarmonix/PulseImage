@@ -9,6 +9,8 @@ import { StemPanel } from '../music/StemPanel'
 import { MusicPlayerBar } from '../music/MusicPlayerBar'
 import { ConfirmDialog, Toaster } from '../ui'
 import { useUiStore } from '../../stores/ui'
+import { useQueueStore } from '../../stores/queue'
+import { useServerJobs } from '../../lib/queries'
 import { cn } from '../../lib/utils'
 
 export function AppShell() {
@@ -17,7 +19,13 @@ export function AppShell() {
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed)
   const composerOpen = useUiStore((s) => s.composerOpen)
   const setComposerOpen = useUiStore((s) => s.setComposerOpen)
+  const serverJobs = useServerJobs()
+  const syncExternalJobs = useQueueStore((s) => s.syncExternal)
   const showDock = location.pathname === '/' || location.pathname === '/library'
+
+  useEffect(() => {
+    if (serverJobs.data) syncExternalJobs(serverJobs.data)
+  }, [serverJobs.data, syncExternalJobs])
 
   useEffect(() => {
     if (!showDock) setComposerOpen(false)

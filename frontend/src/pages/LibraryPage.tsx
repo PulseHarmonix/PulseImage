@@ -49,7 +49,7 @@ const filters: { key: FilterKey; label: string; icon: typeof ImageIcon }[] = [
 ]
 
 export function LibraryPage() {
-  const history = useHistory()
+  const history = useHistory({ refetchInterval: 5_000 })
   const [active, setActive] = useState<FilterKey[]>([])
   const [query, setQuery] = useState('')
   const [density, setDensity] = useState<'full' | 'compact'>('full')

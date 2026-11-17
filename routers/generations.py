@@ -1,4 +1,5 @@
 import json
+import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from services.comfy_service import (
@@ -28,6 +29,7 @@ from services.generation_service import (
     get_asset_by_id,
 )
 from services.comfy_progress import set_progress_job
+from services.job_registry import finish_job, list_jobs, start_job
 from services.video_upscale_service import (
     maybe_upscale_video_result,
     upscale_existing_asset,
@@ -58,6 +60,37 @@ def video_reference_error(resolved_model, source_image, ref_audios, fasth3_mode)
 
 @router.post("/generate")
 async def generate(data: dict):
+    """Generate images or videos and track the job for the shared queue view."""
+    job_id = str(data.get("job_id") or uuid.uuid4().hex)
+    data["job_id"] = job_id
+    prompt = str(data.get("prompt") or "").strip()
+    mode = str(data.get("mode") or "image")
+    client = str(data.get("client") or "")
+    label = prompt.replace("\n", " ")[:72] or "Untitled generation"
+    if data.get("recast"):
+        label = f"Recast · {label}"
+    if client == "mcp":
+        label = f"MCP · {label}"
+    start_job(job_id, label=label, mode=mode, client=client)
+    try:
+        result = await _generate(data)
+    except Exception as exc:
+        finish_job(job_id, error=str(exc))
+        raise
+    if isinstance(result, dict) and result.get("success") is False:
+        finish_job(job_id, error=str(result.get("error") or "Generation failed"))
+    else:
+        finish_job(job_id)
+    return result
+
+
+@router.get("/jobs")
+async def get_jobs():
+    """Return active and recently finished jobs, including MCP jobs."""
+    return {"success": True, "jobs": list_jobs()}
+
+
+async def _generate(data: dict):
     """Generate images or videos based on the provided prompt and parameters."""
     prompt = data.get("prompt")
     resolution = data.get("resolution", "720p")

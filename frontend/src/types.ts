@@ -343,6 +343,8 @@ export interface QueueJob {
   error?: string
   startedAt: number
   finishedAt?: number
+  client?: string
+  external?: boolean
 }
 
 export interface ToastMessage {

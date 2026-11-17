@@ -3,6 +3,7 @@ import { apiGet, apiPost } from './api'
 import type {
   AppSettings,
   Asset,
+  QueueJob,
   ReCaVSRStatus,
   RelayStatus,
   StoryDetail,
@@ -24,11 +25,24 @@ export const queryKeys = {
   story: (id: string) => ['stories', id] as const,
 }
 
-export function useHistory() {
+export function useHistory(options?: { refetchInterval?: number | false }) {
   return useQuery({
     queryKey: queryKeys.history,
     queryFn: () => apiGet<Asset[]>('/history'),
     staleTime: 10_000,
+    refetchInterval: options?.refetchInterval ?? false,
+  })
+}
+
+export function useServerJobs() {
+  return useQuery({
+    queryKey: ['jobs'],
+    queryFn: async () => {
+      const response = await apiGet<{ jobs?: QueueJob[] }>('/jobs')
+      return response.jobs ?? []
+    },
+    refetchInterval: 3_000,
+    staleTime: 0,
   })
 }
 

@@ -216,6 +216,40 @@ python -m compileall -q main.py config.py routers services utils
 
 ---
 
+## MCP SERVER
+
+Pulse Image includes a local MCP server for OpenCode and other MCP-capable clients. It talks to the running Pulse FastAPI backend; it does not run generation itself.
+
+See **[docs/MCP.md](docs/MCP.md)** for the full setup guide, OpenCode configuration, tool catalog, examples, and troubleshooting.
+
+Start the backend first:
+
+```powershell
+python main.py
+```
+
+Run the MCP server over stdio:
+
+```powershell
+venv\Scripts\python.exe mcp_server.py --transport stdio
+```
+
+Or run it as a local Streamable HTTP server:
+
+```powershell
+venv\Scripts\python.exe mcp_server.py --transport streamable-http --host 127.0.0.1 --port 8765
+```
+
+The HTTP MCP endpoint is `http://127.0.0.1:8765/mcp`.
+
+The included `opencode.jsonc` configures a local `pulse-image` MCP server for OpenCode. OpenCode starts it with stdio and a long execution timeout for video generation.
+
+The MCP server exposes library search, image/video/recast generation, LoRAs and models, speech, songs, stems, frames, video-audio extraction, stories, music-video projects, settings, admin tools, and a generic `pulse_api` tool for the full REST API. `pulse_openapi` returns the complete endpoint schema.
+
+MCP access is intentionally local and currently unauthenticated. Do not bind it to a public or untrusted network interface.
+
+---
+
 ## ROUTING AND STORAGE
 
 - The React app is served at `/`.
@@ -234,8 +268,11 @@ python -m compileall -q main.py config.py routers services utils
 PulseImage/
 |-- main.py                  # FastAPI entry point and SPA serving
 |-- config.py                # Settings defaults and DB loading
+|-- mcp_server.py            # Local MCP server for external AI clients
+|-- opencode.jsonc           # OpenCode local MCP configuration
 |-- requirements.txt         # Python dependencies
 |-- LICENSE                  # PolyForm Noncommercial 1.0.0
+|-- docs/MCP.md              # MCP setup and usage guide
 |-- docs/images/             # README screenshots
 |-- frontend/                # React studio (Vite + TypeScript)
 |   |-- src/                 # Pages, components, API client, stores
